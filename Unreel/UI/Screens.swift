@@ -374,6 +374,7 @@ struct SearchScreen: View {
                                         Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
                                     }
                                 }
+                                .tint(.primary)
                             }
                             .onDelete { idx in saveRecent(recent.enumerated().filter { !idx.contains($0.offset) }.map(\.element)) }
                         } header: {
