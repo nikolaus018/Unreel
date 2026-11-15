@@ -2,6 +2,7 @@ import SwiftUI
 
 @main
 struct UnreelApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettings
     @StateObject private var filters: FilterListManager
     @StateObject private var app: AppModel
@@ -10,6 +11,7 @@ struct UnreelApp: App {
 
     init() {
         URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 400 << 20)
+        _ = Orientation.shared
         let settings = AppSettings()
         let filters = FilterListManager()
         _settings = StateObject(wrappedValue: settings)

@@ -24,12 +24,19 @@ final class FeedModel: ObservableObject {
     private(set) var source: Source
     private var continuation: String?
     private let hideShorts: () -> Bool
+    private let filter: ((FeedItem) -> Bool)?
     /// Raw response of the first page, for screens that read more than the items (headers).
     private(set) var firstPage: J?
 
-    init(_ source: Source, hideShorts: @escaping () -> Bool) {
+    init(_ source: Source, hideShorts: @escaping () -> Bool, filter: ((FeedItem) -> Bool)? = nil) {
         self.source = source
         self.hideShorts = hideShorts
+        self.filter = filter
+    }
+
+    private func apply(_ items: [FeedItem]) -> [FeedItem] {
+        guard let filter else { return items }
+        return items.filter(filter)
     }
 
     var canLoadMore: Bool { continuation != nil }
@@ -58,7 +65,7 @@ final class FeedModel: ObservableObject {
             }
             firstPage = json
             let page = Parser.feed(json, hideShorts: hideShorts())
-            items = page.items
+            items = apply(page.items)
             continuation = page.continuation
         } catch is CancellationError {
         } catch {
@@ -74,7 +81,7 @@ final class FeedModel: ObservableObject {
         guard let json = try? await InnerTube.shared.continuation(source.endpoint, token: token) else { return }
         let page = Parser.feed(json, hideShorts: hideShorts())
         let existing = Set(items.map(\.id))
-        items += page.items.filter { !existing.contains($0.id) }
+        items += apply(page.items).filter { !existing.contains($0.id) }
         continuation = page.continuation == token ? nil : page.continuation
     }
 

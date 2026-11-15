@@ -81,7 +81,11 @@ actor InnerTube {
     }
 
     func accountMenu() async throws -> J {
-        try await post("account/account_menu", [:])
+        do {
+            return try await post("account/account_menu", [:])
+        } catch {
+            return try await post("account/account_menu", [:], client: .web)
+        }
     }
 
     /// Search suggestions from YouTube's public autocomplete service.
@@ -96,13 +100,18 @@ actor InnerTube {
 
     // MARK: Transport
 
-    func post(_ endpoint: String, _ body: [String: Any]) async throws -> J {
+    enum Client { case mweb, web }
+
+    func post(_ endpoint: String, _ body: [String: Any], client kind: Client = .mweb) async throws -> J {
         if !bootstrapped { await bootstrap() }
         let cookies = await Self.youtubeCookies()
+        let (clientName, clientNumber, version, platform) = kind == .web
+            ? ("WEB", "1", "2.20261112.10.00", "DESKTOP")
+            : ("MWEB", "2", clientVersion, "MOBILE")
 
         var payload = body
         var client: [String: Any] = [
-            "clientName": "MWEB", "clientVersion": clientVersion, "platform": "MOBILE",
+            "clientName": clientName, "clientVersion": version, "platform": platform,
             "hl": Locale.current.language.languageCode?.identifier ?? "en",
             "gl": Locale.current.region?.identifier ?? "US",
             "userAgent": Self.userAgent, "originalUrl": Self.origin + "/",
@@ -114,8 +123,8 @@ actor InnerTube {
         request.httpMethod = "POST"
         request.httpBody = try JSONSerialization.data(withJSONObject: payload)
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.setValue("2", forHTTPHeaderField: "X-Youtube-Client-Name")
-        request.setValue(clientVersion, forHTTPHeaderField: "X-Youtube-Client-Version")
+        request.setValue(clientNumber, forHTTPHeaderField: "X-Youtube-Client-Name")
+        request.setValue(version, forHTTPHeaderField: "X-Youtube-Client-Version")
         request.setValue(Self.origin, forHTTPHeaderField: "Origin")
         request.setValue(Self.origin, forHTTPHeaderField: "X-Origin")
         request.setValue(Self.origin + "/", forHTTPHeaderField: "Referer")
@@ -134,8 +143,23 @@ actor InnerTube {
             if let msg = try? J(data: data)["error"]["message"].string { throw APIError.message(msg) }
             throw APIError.http(status)
         }
+        #if DEBUG
+        Self.dump(endpoint: endpoint, body: body, data: data)
+        #endif
         return try J(data: data)
     }
+
+    #if DEBUG
+    /// Debug builds keep the last response per endpoint in Caches/innertube for inspection.
+    private static func dump(endpoint: String, body: [String: Any], data: Data) {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("innertube")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var name = endpoint.replacingOccurrences(of: "/", with: "_")
+        if let id = body["browseId"] as? String { name += "-" + id }
+        if body["continuation"] != nil { name += "-cont" }
+        try? data.write(to: dir.appendingPathComponent(name + ".json"))
+    }
+    #endif
 
     /// Reads the current client version and visitor ID from the mobile site, so requests look
     /// like they come from an up-to-date browser.

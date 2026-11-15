@@ -11,6 +11,8 @@ struct VideoItem: Identifiable, Hashable, Codable {
     var published: String?
     var isLive = false
     var isShort = false
+    /// How much of the video the signed-in user has watched (0…1).
+    var progress: Double?
 
     var thumbnail: URL { URL(string: "https://i.ytimg.com/vi/\(id)/hqdefault.jpg")! }
     var smallThumbnail: URL { URL(string: "https://i.ytimg.com/vi/\(id)/mqdefault.jpg")! }
@@ -71,6 +73,15 @@ struct WatchDetails {
     var commentPreview: String?
     var likeStatus: LikeStatus = .none
     var subscribed: Bool?
+    /// Real targets for the (shortened) links and timestamps in the description.
+    var descriptionLinks: [TextLink] = []
+}
+
+/// A link inside text, located by UTF-16 offset (how YouTube reports it).
+struct TextLink: Hashable {
+    let start: Int
+    let length: Int
+    let url: URL
 }
 
 enum LikeStatus { case none, liked, disliked }

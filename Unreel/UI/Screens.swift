@@ -91,7 +91,7 @@ struct SubscribedChannelsRow: View {
     @State private var channels: [ChannelItem] = []
 
     var body: some View {
-        Group {
+        VStack(spacing: 0) {
             if !channels.isEmpty {
                 ScrollView(.horizontal, showsIndicators: false) {
                     LazyHStack(spacing: 16) {
@@ -119,6 +119,7 @@ struct SubscribedChannelsRow: View {
                 .padding(.bottom, 14)
             }
         }
+        .frame(maxWidth: .infinity, minHeight: 1)
         .task(id: app.feedGeneration) {
             guard let json = try? await InnerTube.shared.browse("FEchannels") else { return }
             channels = Parser.feed(json, hideShorts: true).items.compactMap { if case .channel(let c) = $0 { return c } else { return nil } }
@@ -179,7 +180,7 @@ struct YouView: View {
                     NavigationLink(value: Route.browse("FEhistory", "History")) { Label("History", systemImage: "clock.arrow.circlepath") }
                     NavigationLink(value: Route.playlist("WL", "Watch Later")) { Label("Watch Later", systemImage: "clock") }
                     NavigationLink(value: Route.playlist("LL", "Liked Videos")) { Label("Liked Videos", systemImage: "hand.thumbsup") }
-                    NavigationLink(value: Route.browse("FEplaylist_aggregation", "Playlists")) { Label("Playlists", systemImage: "list.bullet.rectangle") }
+                    NavigationLink(value: Route.browse("FElibrary", "Playlists")) { Label("Playlists", systemImage: "list.bullet.rectangle") }
                     NavigationLink(value: Route.browse("FEchannels", "Channels")) { Label("Channels", systemImage: "person.2") }
                 }
             }
@@ -213,9 +214,11 @@ struct BrowseView: View {
     let style: FeedStyle
 
     init(browseId: String, title: String, settings: AppSettings) {
-        _model = StateObject(wrappedValue: FeedModel(.browse(browseId), hideShorts: { settings.hideShorts }))
+        // The library page mixes history, Shorts and playlists; the Playlists screen keeps playlists only.
+        let filter: ((FeedItem) -> Bool)? = browseId == "FElibrary" ? { if case .playlist = $0 { true } else { false } } : nil
+        _model = StateObject(wrappedValue: FeedModel(.browse(browseId), hideShorts: { settings.hideShorts }, filter: filter))
         self.title = title
-        style = browseId == "FEhistory" ? .rows : .rows
+        style = .rows
     }
 
     var body: some View {

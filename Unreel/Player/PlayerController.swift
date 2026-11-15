@@ -102,8 +102,24 @@ final class PlayerController: NSObject, ObservableObject {
     /// The view the player can rest in while no player screen is visible (keeps playback alive).
     var parkingView: UIView { parking }
 
-    /// Moves the video surface into `container`, filling it.
+    /// Video surfaces currently on screen, newest last. The newest one shows the video.
+    private var surfaces: [UIView] = []
+
+    /// Registers a surface and moves the video into it.
     func attach(to container: UIView) {
+        surfaces.removeAll { $0 === container }
+        surfaces.append(container)
+        place(in: container)
+    }
+
+    /// Unregisters a surface; the video moves to the next visible surface, or back to parking.
+    func detach(from container: UIView) {
+        surfaces.removeAll { $0 === container }
+        guard webView.superview === container else { return }
+        if let next = surfaces.last { place(in: next) } else { park() }
+    }
+
+    private func place(in container: UIView) {
         guard webView.superview !== container else { return }
         webView.removeFromSuperview()
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -116,9 +132,7 @@ final class PlayerController: NSObject, ObservableObject {
         ])
     }
 
-    /// Returns the surface to the parking spot if it is still inside `container`.
-    func detach(from container: UIView) {
-        guard webView.superview === container else { return }
+    private func park() {
         webView.removeFromSuperview()
         webView.translatesAutoresizingMaskIntoConstraints = true
         webView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)

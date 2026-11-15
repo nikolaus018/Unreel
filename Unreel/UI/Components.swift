@@ -25,6 +25,18 @@ struct Thumbnail: View {
         Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
             .overlay { RemoteImage(url: small ? video.smallThumbnail : video.thumbnail) }
+            .overlay(alignment: .bottomLeading) {
+                if let p = video.progress, p > 0 {
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            Rectangle().fill(.white.opacity(0.35))
+                            Rectangle().fill(Color.red).frame(width: geo.size.width * min(p, 1))
+                        }
+                    }
+                    .frame(height: 3)
+                    .frame(maxHeight: .infinity, alignment: .bottom)
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(alignment: .bottomTrailing) {
                 Group {
@@ -42,6 +54,7 @@ struct Thumbnail: View {
                 .font(.system(size: small ? 10 : 12, weight: .semibold).monospacedDigit())
                 .foregroundStyle(.white)
                 .padding(small ? 4 : 7)
+                .padding(.bottom, (video.progress ?? 0) > 0 ? 3 : 0)
             }
     }
 }
@@ -156,8 +169,7 @@ struct PlaylistRow: View {
                 .frame(width: 164)
             VStack(alignment: .leading, spacing: 3) {
                 Text(playlist.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                if let o = playlist.owner { Text(o).font(.caption).foregroundStyle(.secondary) }
-                Text("Playlist").font(.caption).foregroundStyle(.secondary)
+                Text(playlist.owner ?? "Playlist").font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 0)
         }

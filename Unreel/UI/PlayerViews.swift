@@ -15,7 +15,7 @@ struct PlayerSurface: UIViewRepresentable {
         return v
     }
 
-    func updateUIView(_ v: UIView, context: Context) { player.attach(to: v) }
+    func updateUIView(_ v: UIView, context: Context) {}
 
     func makeCoordinator() -> PlayerController { player }
 
@@ -302,11 +302,9 @@ func format(_ t: Double) -> String {
     return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60) : String(format: "%d:%02d", s / 60, s % 60)
 }
 
+@MainActor
 func setOrientation(landscape: Bool) {
-    guard let scene = UIApplication.shared.connectedScenes.first(where: { $0.activationState == .foregroundActive }) as? UIWindowScene
-            ?? UIApplication.shared.connectedScenes.first as? UIWindowScene else { return }
-    scene.requestGeometryUpdate(.iOS(interfaceOrientations: landscape ? .landscapeRight : .portrait))
-    scene.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    if landscape { Orientation.shared.enterFullscreen() } else { Orientation.shared.exitFullscreen() }
 }
 
 struct Scrubber: View {

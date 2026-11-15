@@ -14,7 +14,7 @@ struct WatchView: View {
         Group {
             if landscape {
                 playerArea(fullscreen: true)
-                    .ignoresSafeArea()
+                    .gesture(exitFullscreenGesture)
                     .statusBarHidden()
                     .persistentSystemOverlays(.hidden)
             } else {
@@ -32,6 +32,8 @@ struct WatchView: View {
             }
         }
         .background(Color.black.ignoresSafeArea(edges: landscape ? .all : .top).opacity(1 - min(dragOffset / 600, 1)))
+        .onAppear { Orientation.shared.setPlayerVisible(true) }
+        .onDisappear { Orientation.shared.setPlayerVisible(false) }
         .sheet(isPresented: $showComments) {
             if let token = app.watch?.commentsToken {
                 CommentsView(token: token, count: app.watch?.commentsCount)
@@ -47,6 +49,11 @@ struct WatchView: View {
             }
         }
         .environment(\.openURL, OpenURLAction { url in
+            if url.scheme == "unreel-seek", let t = Double(url.absoluteString.replacingOccurrences(of: "unreel-seek:", with: "")) {
+                showDescription = false
+                app.player.seek(to: t)
+                return .handled
+            }
             if let host = url.host?.lowercased(), host.contains("youtube.com") || host == "youtu.be" {
                 showDescription = false
                 app.open(url: url)
@@ -56,7 +63,14 @@ struct WatchView: View {
         })
     }
 
-    /// Drag the player down to shrink the watch screen back into the mini player.
+    /// Full screen: swipe down to leave.
+    private var exitFullscreenGesture: some Gesture {
+        DragGesture(minimumDistance: 20).onEnded { g in
+            if g.translation.height > 60, abs(g.translation.height) > abs(g.translation.width) { setOrientation(landscape: false) }
+        }
+    }
+
+    /// Drag the player down to shrink the watch screen back into the mini player; swipe up for full screen.
     private var minimizeGesture: some Gesture {
         DragGesture(minimumDistance: 12, coordinateSpace: .global)
             .onChanged { g in
@@ -64,7 +78,10 @@ struct WatchView: View {
                 dragOffset = max(0, g.translation.height)
             }
             .onEnded { g in
-                if g.translation.height > 120 || g.predictedEndTranslation.height > 380 {
+                if g.translation.height < -50, abs(g.translation.height) > abs(g.translation.width) {
+                    withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
+                    setOrientation(landscape: true)
+                } else if g.translation.height > 120 || g.predictedEndTranslation.height > 380 {
                     app.showPlayer = false
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dragOffset = 0 }
                 } else {
@@ -75,8 +92,8 @@ struct WatchView: View {
 
     private func playerArea(fullscreen: Bool) -> some View {
         ZStack {
-            Color.black
-            PlayerSurface(player: app.player)
+            Color.black.ignoresSafeArea(edges: fullscreen ? .all : [])
+            PlayerSurface(player: app.player).ignoresSafeArea(edges: fullscreen ? .all : [])
             PlayerControls(state: app.player.state, player: app.player, fullscreen: fullscreen) {
                 if fullscreen { setOrientation(landscape: false) } else { app.showPlayer = false }
             }
@@ -281,7 +298,7 @@ struct DescriptionSheet: View {
                         stat(details.date, "Published")
                     }
                     if let d = details.description, !d.isEmpty {
-                        Text(linkified(d)).font(.subheadline).textSelection(.enabled)
+                        Text(linkified(d, links: details.descriptionLinks)).font(.subheadline).textSelection(.enabled)
                     }
                 }
                 .padding(20)
@@ -300,18 +317,23 @@ struct DescriptionSheet: View {
     }
 }
 
-func linkified(_ text: String) -> AttributedString {
-    var attributed = AttributedString(text)
-    guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) else { return attributed }
-    let ns = text as NSString
-    for match in detector.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
-        guard let url = match.url, let range = Range(match.range, in: text),
-              let lower = AttributedString.Index(range.lowerBound, within: attributed),
-              let upper = AttributedString.Index(range.upperBound, within: attributed) else { continue }
-        attributed[lower..<upper].link = url
-        attributed[lower..<upper].foregroundColor = .accentColor
+/// Makes links tappable: YouTube's own link targets first, then any other URL found in the text.
+func linkified(_ text: String, links: [TextLink] = []) -> AttributedString {
+    let ns = NSMutableAttributedString(string: text)
+    let full = NSRange(location: 0, length: (text as NSString).length)
+    var covered = IndexSet()
+    for link in links {
+        let range = NSRange(location: link.start, length: link.length)
+        guard NSMaxRange(range) <= full.length else { continue }
+        ns.addAttribute(.link, value: link.url, range: range)
+        covered.insert(integersIn: range.location..<NSMaxRange(range))
     }
-    return attributed
+    if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+        for match in detector.matches(in: text, range: full) where !covered.contains(match.range.location) {
+            if let url = match.url { ns.addAttribute(.link, value: url, range: match.range) }
+        }
+    }
+    return (try? AttributedString(ns, including: \.uiKit)) ?? AttributedString(text)
 }
 
 // MARK: - Comments

@@ -40,7 +40,7 @@ enum Parser {
                             if case .video(let v) = item, hideShorts && v.isShort { break }
                             add(item)
                         }
-                    case "channelRenderer", "compactChannelRenderer", "gridChannelRenderer":
+                    case "channelRenderer", "compactChannelRenderer", "gridChannelRenderer", "channelListItemRenderer":
                         if let c = channel(j) { add(.channel(c)) }
                     case "compactPlaylistRenderer", "playlistRenderer", "gridPlaylistRenderer", "compactRadioRenderer", "radioRenderer":
                         if let p = playlist(j) { add(.playlist(p)) }
@@ -95,7 +95,8 @@ enum Parser {
             views: r["shortViewCountText"].text ?? r["viewCountText"].text,
             published: r["publishedTimeText"].text,
             isLive: isLive,
-            isShort: isShort)
+            isShort: isShort,
+            progress: r["thumbnailOverlays"].array.first { $0["thumbnailOverlayResumePlaybackRenderer"].exists }?["thumbnailOverlayResumePlaybackRenderer"]["percentDurationWatched"].double.map { $0 / 100 })
     }
 
     static func short(_ r: J, key: String) -> VideoItem? {
@@ -116,14 +117,28 @@ enum Parser {
         let title = meta["title"]["content"].string ?? ""
         let rows = meta["metadata"]["contentMetadataViewModel"]["metadataRows"].array
         let parts = rows.flatMap { $0["metadataParts"].array.compactMap { $0["text"]["content"].string } }
+        let avatarVM = meta["image"]
+        let avatar = avatarVM.first("avatarViewModel")["image"].thumbnailURL
+        let channelId = avatarVM.first("browseEndpoint")["browseId"].string
         switch r["contentType"].string {
-        case "LOCKUP_CONTENT_TYPE_VIDEO":
-            let badge = r.first("thumbnailBadgeViewModel")["text"].string
-            return .video(VideoItem(id: id, title: title, channelName: parts.first, duration: badge,
-                                    views: parts.count > 1 ? parts[1] : nil, published: parts.count > 2 ? parts[2] : nil))
-        case "LOCKUP_CONTENT_TYPE_PLAYLIST", "LOCKUP_CONTENT_TYPE_PODCAST":
+        case "LOCKUP_CONTENT_TYPE_VIDEO", "LOCKUP_CONTENT_TYPE_SHORTS":
+            let badge = r["contentImage"].first("thumbnailBadgeViewModel")
+            let badgeText = badge["text"].string
+            let isLive = (badge["badgeStyle"].string ?? "").contains("LIVE") || badgeText == "LIVE"
+            let isShort = r["contentType"].string == "LOCKUP_CONTENT_TYPE_SHORTS" || r["rendererContext"].first("reelWatchEndpoint").exists
+            let progress = r["contentImage"].first("thumbnailOverlayProgressBarViewModel")["startPercent"].double
+            // Parts are [channel, views, published]; channel-less lockups (on channel pages) drop the first.
+            let hasChannel = parts.count >= 3 || (parts.first.map { !$0.contains("view") && !$0.contains("ago") } ?? false)
+            let channel = hasChannel ? parts.first : nil
+            let rest = hasChannel ? Array(parts.dropFirst()) : parts
+            var v = VideoItem(id: id, title: title, channelName: channel, channelId: channelId, channelAvatar: avatar,
+                              duration: isLive ? nil : badgeText, views: rest.first, published: rest.count > 1 ? rest[1] : nil,
+                              isLive: isLive, isShort: isShort)
+            v.progress = progress.map { $0 / 100 }
+            return .video(v)
+        case "LOCKUP_CONTENT_TYPE_PLAYLIST", "LOCKUP_CONTENT_TYPE_PODCAST", "LOCKUP_CONTENT_TYPE_ALBUM":
             let thumb = r["contentImage"].first("image").thumbnailURL
-            let count = r.first("thumbnailBadgeViewModel")["text"].string
+            let count = r["contentImage"].first("thumbnailBadgeViewModel")["text"].string
             return .playlist(PlaylistItem(id: id, title: title, thumbnail: thumb, count: count, owner: parts.first))
         default:
             return nil
@@ -160,6 +175,7 @@ enum Parser {
         details.date = header["publishDate"].text
         details.likes = header["factoid"].array.first?.first("value").text
         let body = root.first("expandableVideoDescriptionBodyRenderer")
+        details.descriptionLinks = textLinks(body["attributedDescriptionBodyText"]["commandRuns"], videoId: videoId)
         details.description = body["attributedDescriptionBodyText"]["content"].string
             ?? body["attributedDescription"]["content"].string
             ?? body["descriptionBodyText"].text
@@ -201,6 +217,32 @@ enum Parser {
         details.commentPreview = root.first("commentTeaserCarouselItemViewModel")["commentText"].string
             ?? root.first("carouselItemViewModel").first("content").string
         return details
+    }
+
+    /// Resolves `commandRuns` to URLs: external links (unwrapping YouTube's redirect), videos,
+    /// timestamps in the current video (as `unreel-seek:SECONDS`) and channels.
+    static func textLinks(_ runs: J, videoId: String) -> [TextLink] {
+        runs.array.compactMap { run in
+            guard let start = run["startIndex"].int, let length = run["length"].int else { return nil }
+            let cmd = run["onTap"]["innertubeCommand"]
+            var url: URL?
+            if let watch = cmd["watchEndpoint"].dict.map(J.init), let id = watch["videoId"].string {
+                let t = watch["startTimeSeconds"].int ?? 0
+                url = id == videoId && t > 0 ? URL(string: "unreel-seek:\(t)") : URL(string: "https://youtu.be/\(id)" + (t > 0 ? "?t=\(t)" : ""))
+            } else if let raw = cmd["urlEndpoint"]["url"].string ?? cmd["commandMetadata"]["webCommandMetadata"]["url"].string {
+                if let comps = URLComponents(string: raw), comps.path == "/redirect",
+                   let q = comps.queryItems?.first(where: { $0.name == "q" })?.value {
+                    url = URL(string: q)
+                } else if raw.hasPrefix("/") {
+                    url = URL(string: "https://www.youtube.com" + raw)
+                } else {
+                    url = URL(string: raw)
+                }
+            } else if let id = cmd["browseEndpoint"]["browseId"].string {
+                url = URL(string: "https://www.youtube.com/channel/\(id)")
+            }
+            return url.map { TextLink(start: start, length: length, url: $0) }
+        }
     }
 
     // MARK: Comments

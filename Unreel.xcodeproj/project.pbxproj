@@ -36,6 +36,7 @@
 		AC14E797C0F1D6C01CB0560E /* easylist.txt in Resources */ = {isa = PBXBuildFile; fileRef = 7076B9D5CED9735236BFD2C7 /* easylist.txt */; };
 		BD285DCF3382DB7BB52CE5DE /* Parser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 237B5EFAD6F3D1DADC30A89E /* Parser.swift */; };
 		C484E104815ACE3E3C0C29FB /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C80EF17C7DFFF66072131893 /* OnboardingView.swift */; };
+		C5D8FF9F8205A51B54DF3A60 /* Orientation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02A975F51C61C9B8E501A450 /* Orientation.swift */; };
 		D365F383A2703340C7ACB566 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = 367D04E23B00087427032BA6 /* Components.swift */; };
 		D6E1DB949FC75190745CFFBF /* engine.js in Resources */ = {isa = PBXBuildFile; fileRef = 9DB28E1FEB7C047734B9CD0C /* engine.js */; };
 		DEE212B84519C4B660434D7F /* FeedModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6D7547D626F42CA657FB32BE /* FeedModel.swift */; };
@@ -58,6 +59,7 @@
 
 /* Begin PBXFileReference section */
 		00F58BD8E81ADF5ED33E367A /* comments.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = comments.json; sourceTree = "<group>"; };
+		02A975F51C61C9B8E501A450 /* Orientation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Orientation.swift; sourceTree = "<group>"; };
 		0604BD8DFCC0DC15C4EF9095 /* SponsorBlockClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SponsorBlockClient.swift; sourceTree = "<group>"; };
 		0779702DC3EFF5BA5A041376 /* next.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = next.json; sourceTree = "<group>"; };
 		0B3DDC1978708536D0540B99 /* NowPlayingController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowPlayingController.swift; sourceTree = "<group>"; };
@@ -230,6 +232,7 @@
 			isa = PBXGroup;
 			children = (
 				E7F3F73CD44A8D3F456F7AD5 /* AppModel.swift */,
+				02A975F51C61C9B8E501A450 /* Orientation.swift */,
 				A8458598B88067A8C56507F4 /* UnreelApp.swift */,
 			);
 			path = App;
@@ -377,6 +380,7 @@
 				A3E80686154F51A7929422F4 /* Models.swift in Sources */,
 				33F610FE44EBD1CDAFE3A925 /* NowPlayingController.swift in Sources */,
 				C484E104815ACE3E3C0C29FB /* OnboardingView.swift in Sources */,
+				C5D8FF9F8205A51B54DF3A60 /* Orientation.swift in Sources */,
 				BD285DCF3382DB7BB52CE5DE /* Parser.swift in Sources */,
 				013EC1CD62BC1BBB13C873B3 /* PlayerController.swift in Sources */,
 				556017BB6F9BA9FA9A5AD666 /* PlayerViews.swift in Sources */,
