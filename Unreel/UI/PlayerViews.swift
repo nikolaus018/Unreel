@@ -68,8 +68,8 @@ struct PlayerControls: View {
                     .transition(.opacity)
             }
 
-            // Thin progress line while the controls are hidden.
-            if !visible && state.duration > 0 && !state.isAd {
+            // Thin progress line while the controls are hidden (portrait only).
+            if !visible && !fullscreen && state.duration > 0 && !state.isAd {
                 VStack {
                     Spacer()
                     GeometryReader { geo in
