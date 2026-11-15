@@ -25,6 +25,17 @@ final class PlaybackState: ObservableObject {
     @Published var unplayable: String?
     @Published var segments: [SponsorSegment] = []
     @Published var chapters: [Chapter] = []
+    @Published var captionTracks: [CaptionTrack] = []
+    @Published var captionTrack: CaptionTrack?
+    @Published var cues: [CaptionCue] = []
+    /// When `time` was last reported, to interpolate between reports.
+    var timeStamp = Date()
+
+    /// Playback time estimated between the page's reports (smooth captions and scrubber).
+    func estimatedTime(at now: Date = Date()) -> Double {
+        guard playing, !waiting else { return time }
+        return min(time + now.timeIntervalSince(timeStamp) * rate, duration > 0 ? duration : .infinity)
+    }
 
     func chapter(at t: Double) -> Chapter? { chapters.last { $0.start <= t } }
 }
@@ -55,6 +66,8 @@ final class PlayerController: NSObject, ObservableObject {
     private var reloadNeeded = false
     private var pageReady = false
     private var lastConfigJSON = ""
+    /// Caption files received for the current video, keyed "lang|kind".
+    private var captionFiles: [String: String] = [:]
     private let parking = UIView(frame: CGRect(x: 0, y: 0, width: 2, height: 2))
 
     init(settings: AppSettings, filters: FilterListManager) {
@@ -231,6 +244,10 @@ final class PlayerController: NSObject, ObservableObject {
         state.unplayable = nil
         state.segments = []
         state.chapters = []
+        state.captionTracks = []
+        state.captionTrack = nil
+        state.cues = []
+        captionFiles = [:]
         state.time = start
         state.duration = 0
         state.buffered = 0
@@ -320,10 +337,81 @@ final class PlayerController: NSObject, ObservableObject {
         }
     }
 
-    func toggleCaptions(_ done: @escaping (Bool) -> Void) {
-        webView.evaluateJavaScript("window.__unreel ? window.__unreel.toggleCaptions() : false") { result, _ in
-            done((result as? Bool) ?? false)
+    // MARK: Captions
+
+    /// Reads the video's caption tracks and turns on the preferred language, if there is one.
+    private func loadCaptionTracks() {
+        webView.evaluateJavaScript("window.__unreel ? JSON.stringify(window.__unreel.captionTracks()) : '[]'") { [weak self] result, _ in
+            guard let self, let json = result as? String, let data = json.data(using: .utf8),
+                  let tracks = try? JSONDecoder().decode([CaptionTrack].self, from: data) else { return }
+            self.state.captionTracks = tracks
+            self.log.notice("caption tracks: \(tracks.map(\.id).joined(separator: ","), privacy: .public)")
+            if let lang = self.settings.captionsLanguage, self.state.captionTrack == nil,
+               let track = Self.bestTrack(for: lang, in: tracks) {
+                self.setCaptions(track, remember: false)
+            }
         }
+    }
+
+    /// The player's own track list is only filled once captions are loaded; re-read it then.
+    private func refreshCaptionTracks() {
+        webView.evaluateJavaScript("window.__unreel ? JSON.stringify(window.__unreel.captionTracks()) : '[]'") { [weak self] result, _ in
+            guard let self, let json = result as? String, let data = json.data(using: .utf8),
+                  let tracks = try? JSONDecoder().decode([CaptionTrack].self, from: data), !tracks.isEmpty else { return }
+            if tracks != self.state.captionTracks { self.state.captionTracks = tracks }
+        }
+    }
+
+    static func bestTrack(for lang: String, in tracks: [CaptionTrack]) -> CaptionTrack? {
+        tracks.first { $0.lang == lang && !$0.isAuto }
+            ?? tracks.first { $0.lang.hasPrefix(lang) && !$0.isAuto }
+            ?? tracks.first { $0.lang == lang }
+            ?? tracks.first { $0.lang.hasPrefix(lang) }
+    }
+
+    func setCaptions(_ track: CaptionTrack?, remember: Bool = true) {
+        state.captionTrack = track
+        state.cues = []
+        if remember { settings.captionsLanguage = track?.lang }
+        log.notice("setCaptions \(track?.id ?? "off", privacy: .public)")
+        if let track {
+            if let file = captionFiles[track.id] { state.cues = CaptionParser.json3(file) }
+            js("setCaptions('\(track.lang)', '\(track.kind)')")
+            ensureCaptionsLoaded(track, attempt: 1)
+        } else {
+            js("captionsOff()")
+        }
+    }
+
+    /// If the player hasn't downloaded the track yet, turn captions off and on in the page,
+    /// which reliably makes it fetch them.
+    private func ensureCaptionsLoaded(_ track: CaptionTrack, attempt: Int) {
+        let videoId = current?.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, self.current?.id == videoId, self.state.captionTrack == track,
+                  self.captionFiles[track.id] == nil, attempt <= 3 else { return }
+            self.log.notice("captions not loaded, retrying (\(attempt))")
+            self.js("captionsOff()")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                guard self.state.captionTrack == track else { return }
+                self.js("setCaptions('\(track.lang)', '\(track.kind)')")
+                self.ensureCaptionsLoaded(track, attempt: attempt + 1)
+            }
+        }
+    }
+
+    /// The CC button: off if on; otherwise the remembered language, the device language, or the first track.
+    func toggleCaptions() -> Bool {
+        if state.captionTrack != nil { setCaptions(nil); return true }
+        let tracks = state.captionTracks
+        guard !tracks.isEmpty else { return false }
+        let device = Locale.current.language.languageCode?.identifier ?? "en"
+        let track = settings.captionsLanguage.flatMap { Self.bestTrack(for: $0, in: tracks) }
+            ?? Self.bestTrack(for: device, in: tracks)
+            ?? Self.bestTrack(for: "en", in: tracks)
+            ?? tracks.first
+        setCaptions(track)
+        return true
     }
 
     func undoSkip() { js("undoSkip()") }
@@ -382,6 +470,7 @@ final class PlayerController: NSObject, ObservableObject {
             let s = state
             s.playing = body["playing"] as? Bool ?? false
             s.time = body["time"] as? Double ?? s.time
+            s.timeStamp = Date()
             let d = body["duration"] as? Double ?? 0
             if d > 0 { s.duration = d }
             s.buffered = body["buffered"] as? Double ?? 0
@@ -393,9 +482,23 @@ final class PlayerController: NSObject, ObservableObject {
             if let levels = body["levels"] as? [String], levels != s.levels { s.levels = levels }
             if let q = body["quality"] as? String, q != s.quality { s.quality = q }
             s.pageLoading = false
-            if s.playing && s.time > 0.05 && !s.isAd && !s.hasStarted { s.hasStarted = true }
+            if s.playing && s.time > 0.05 && !s.isAd && !s.hasStarted {
+                s.hasStarted = true
+                loadCaptionTracks()
+            }
             if settings.keepScreenOn { UIApplication.shared.isIdleTimerDisabled = s.playing }
             if settings.lockScreenControls, !s.isAd { updateNowPlaying() }
+        case "captions":
+            guard let lang = body["lang"] as? String, let text = body["body"] as? String else { return }
+            if let id = body["videoId"] as? String, let current, id != current.id { return }
+            let kind = body["kind"] as? String ?? ""
+            // Keep every file: YouTube may download a track before the app asks for it.
+            captionFiles[lang + "|" + kind] = text
+            refreshCaptionTracks()
+            log.notice("captions file \(lang, privacy: .public)|\(kind, privacy: .public) bytes=\(text.count)")
+            if let track = state.captionTrack, track.lang == lang, track.kind == kind {
+                state.cues = CaptionParser.json3(text)
+            }
         case "unplayable":
             // Error responses often have no videoDetails; a report without an ID is about the current video.
             let id = body["videoId"] as? String

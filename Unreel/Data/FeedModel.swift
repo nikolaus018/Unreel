@@ -56,7 +56,15 @@ final class FeedModel: ObservableObject {
         if !loadedOnce && !isLoading { await reload() }
     }
 
+    /// Reloads the first page. On failure or cancellation the current items stay on screen.
     func reload() async {
+        // Run detached from the caller: SwiftUI cancels `.refreshable` tasks when the view
+        // updates, which would otherwise abort the request halfway.
+        let task = Task { await performReload() }
+        await task.value
+    }
+
+    private func performReload() async {
         isLoading = true
         error = nil
         defer { isLoading = false; loadedOnce = true }
@@ -65,30 +73,27 @@ final class FeedModel: ObservableObject {
             var page: FeedPage
             switch source {
             case .browse(let id, let params):
-                do {
-                    json = try await InnerTube.shared.browse(id, params: params, client: client)
-                    page = Parser.feed(json, hideShorts: hideShorts())
-                } catch {
-                    guard client == .mweb else { throw error }
-                    json = J(nil); page = FeedPage()
-                }
-                if page.items.isEmpty && client == .mweb {
-                    if let web = try? await InnerTube.shared.browse(id, params: params, client: .web) {
-                        let webPage = Parser.feed(web, hideShorts: hideShorts())
-                        if !webPage.items.isEmpty { json = web; page = webPage; client = .web }
-                    }
+                json = try await InnerTube.shared.browse(id, params: params, client: client)
+                page = Parser.feed(json, hideShorts: hideShorts())
+                // Some pages are empty for the mobile client but filled for the desktop one.
+                if page.items.isEmpty && client == .mweb,
+                   let web = try? await InnerTube.shared.browse(id, params: params, client: .web) {
+                    let webPage = Parser.feed(web, hideShorts: hideShorts())
+                    if !webPage.items.isEmpty { json = web; page = webPage; client = .web }
                 }
             case .search(let q, let params):
                 json = try await InnerTube.shared.search(q, params: params)
                 page = Parser.feed(json, hideShorts: hideShorts())
             }
+            let newItems = apply(page.items)
+            // An empty answer on a refresh is almost always a hiccup: keep what is shown.
+            if newItems.isEmpty && !items.isEmpty { return }
             firstPage = json
-            items = apply(page.items)
+            items = newItems
             continuation = page.continuation
-        } catch is CancellationError {
         } catch {
-            if (error as? URLError)?.code == .cancelled { return }
-            self.error = error.localizedDescription
+            if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+            if items.isEmpty { self.error = error.localizedDescription }
         }
     }
 

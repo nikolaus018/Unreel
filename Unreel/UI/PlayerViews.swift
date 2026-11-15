@@ -55,6 +55,7 @@ struct PlayerControls: View {
     @State private var lastSeekTap: (forward: Bool, at: Date)?
     @GestureState private var boosting = false
     @State private var rateBeforeBoost: Double = 1
+    @State private var showOptions = false
 
     var body: some View {
         ZStack {
@@ -79,6 +80,11 @@ struct PlayerControls: View {
                     .frame(height: 2.5)
                 }
                 .allowsHitTesting(false)
+            }
+
+            if state.captionTrack != nil, !state.cues.isEmpty, !state.isAd {
+                CaptionOverlay(state: state, fullscreen: fullscreen, controlsVisible: visible && app.upNext == nil)
+                    .allowsHitTesting(false)
             }
 
             // Gesture layer: tap toggles controls, double tap on either side seeks.
@@ -178,6 +184,11 @@ struct PlayerControls: View {
         }
         .onAppear { scheduleHide() }
         .onChange(of: state.playing) { _, playing in if playing { scheduleHide() } else { show() } }
+        .sheet(isPresented: $showOptions, onDismiss: { scheduleHide() }) {
+            PlayerOptionsSheet(state: state, player: player)
+                .presentationDetents(fullscreen ? [.large] : [.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func gestureZone(forward: Bool) -> some View {
@@ -189,16 +200,24 @@ struct PlayerControls: View {
 
     private var controls: some View {
         ZStack {
-            LinearGradient(colors: [.black.opacity(0.55), .clear, .clear, .black.opacity(0.65)], startPoint: .top, endPoint: .bottom)
-                .allowsHitTesting(false)
+            // Edge to edge, also behind the Dynamic Island and home indicator.
+            LinearGradient(stops: [
+                .init(color: .black.opacity(0.6), location: 0),
+                .init(color: .black.opacity(0.15), location: 0.3),
+                .init(color: .black.opacity(0.15), location: 0.65),
+                .init(color: .black.opacity(0.7), location: 1),
+            ], startPoint: .top, endPoint: .bottom)
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
 
-            VStack {
+            VStack(spacing: 0) {
                 topBar
-                Spacer()
+                Spacer(minLength: 0)
                 bottomBar
             }
-            .padding(.horizontal, fullscreen ? 28 : 12)
-            .padding(.vertical, fullscreen ? 18 : 8)
+            .padding(.horizontal, fullscreen ? 20 : 12)
+            .padding(.top, fullscreen ? 22 : 8)
+            .padding(.bottom, fullscreen ? 14 : 4)
 
             centerButtons
         }
@@ -207,72 +226,62 @@ struct PlayerControls: View {
 
     private var topBar: some View {
         HStack(spacing: 10) {
-            Button(action: onCollapse) {
-                Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "chevron.down")
-                    .font(.system(size: 17, weight: .semibold))
-                    .frame(width: 36, height: 36)
+            if !fullscreen {
+                Button(action: onCollapse) {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Circle())
+                }
+                .glassEffect(.clear.interactive(), in: Circle())
+                .accessibilityLabel("Minimize player")
             }
-            .glassEffect(.clear.interactive(), in: Circle())
-            .accessibilityLabel(fullscreen ? "Exit full screen" : "Minimize player")
-
-            if fullscreen, let title = player.current?.title {
-                Text(title).font(.headline).lineLimit(1).shadow(radius: 4)
+            if fullscreen, let title = player.current?.title, !title.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.headline).lineLimit(1)
+                    if let c = player.current?.channelName { Text(c).font(.caption).foregroundStyle(.white.opacity(0.75)).lineLimit(1) }
+                }
+                .shadow(color: .black.opacity(0.5), radius: 4)
             }
-            Spacer()
+            Spacer(minLength: 8)
 
-            Button { player.togglePiP() } label: {
-                Image(systemName: state.pip ? "pip.exit" : "pip.enter").frame(width: 36, height: 36)
+            topButton(state.captionTrack != nil ? "captions.bubble.fill" : "captions.bubble",
+                      label: state.captionTrack != nil ? "Turn off captions" : "Turn on captions") {
+                if !player.toggleCaptions() { app.show(Toast(icon: "captions.bubble", text: "No captions for this video")) }
+                show()
             }
-            .glassEffect(.clear.interactive(), in: Circle())
-            .accessibilityLabel("Picture in Picture")
+            .opacity(state.captionTracks.isEmpty ? 0.45 : 1)
 
-            settingsMenu
+            topButton(state.pip ? "pip.exit" : "pip.enter", label: "Picture in Picture") {
+                player.togglePiP()
+            }
+
+            topButton("gearshape", label: "Playback settings") {
+                showOptions = true
+                hideTask?.cancel()
+            }
         }
-        .font(.system(size: 16, weight: .semibold))
     }
 
-    private var settingsMenu: some View {
-        Menu {
-            Menu {
-                ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0], id: \.self) { r in
-                    Button { player.setRate(r); show() } label: {
-                        if abs(state.rate - r) < 0.01 { Label(rateLabel(r), systemImage: "checkmark") } else { Text(rateLabel(r)) }
-                    }
-                }
-            } label: { Label("Speed · \(rateLabel(state.rate))", systemImage: "gauge.with.dots.needle.50percent") }
-
-            if !state.levels.isEmpty {
-                Menu {
-                    ForEach(state.levels, id: \.self) { q in
-                        Button { player.setQuality(q) } label: {
-                            if q == state.quality { Label(qualityLabel(q), systemImage: "checkmark") } else { Text(qualityLabel(q)) }
-                        }
-                    }
-                } label: { Label("Quality · \(qualityLabel(state.quality))", systemImage: "sparkles.tv") }
-            }
-
-            Button {
-                player.toggleCaptions { ok in
-                    if !ok { app.show(Toast(icon: "captions.bubble", text: "No captions for this video")) }
-                }
-            } label: { Label("Captions", systemImage: "captions.bubble") }
-
-            if let v = player.current {
-                ShareLink(item: shareURL(v)) { Label("Share", systemImage: "square.and.arrow.up") }
-            }
-        } label: {
-            Image(systemName: "ellipsis").frame(width: 36, height: 36)
+    private func topButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 36, height: 36)
+                .contentShape(Circle())
         }
         .glassEffect(.clear.interactive(), in: Circle())
-        .onTapGesture { show() }
+        .accessibilityLabel(label)
     }
 
     private var centerButtons: some View {
-        HStack(spacing: fullscreen ? 64 : 44) {
+        HStack(spacing: fullscreen ? 72 : 44) {
             Button { player.seek(by: -10); show() } label: {
                 Image(systemName: "gobackward.10").font(.system(size: 24, weight: .semibold)).frame(width: 52, height: 52)
+                    .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
+            .accessibilityLabel("Back 10 seconds")
 
             Button {
                 if state.ended { player.seek(to: 0); player.resume() } else { player.togglePlay() }
@@ -282,38 +291,48 @@ struct PlayerControls: View {
                     .font(.system(size: 34, weight: .bold))
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 72, height: 72)
+                    .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
             .opacity((state.waiting && state.playing) || !state.hasStarted ? 0 : 1)
+            .accessibilityLabel(state.playing ? "Pause" : "Play")
 
             Button { player.seek(by: 10); show() } label: {
                 Image(systemName: "goforward.10").font(.system(size: 24, weight: .semibold)).frame(width: 52, height: 52)
+                    .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
+            .accessibilityLabel("Forward 10 seconds")
         }
     }
 
     private var bottomBar: some View {
-        VStack(spacing: 6) {
-            HStack {
+        VStack(spacing: 4) {
+            HStack(spacing: 4) {
                 Text(format(scrubbing ?? state.time))
                 Text("/").foregroundStyle(.white.opacity(0.6))
                 Text(format(state.duration)).foregroundStyle(.white.opacity(0.8))
                 if let ch = state.chapter(at: scrubbing ?? state.time) {
                     Text("· \(ch.title)").lineLimit(1).foregroundStyle(.white.opacity(0.9))
                 }
-                Spacer()
+                Spacer(minLength: 8)
+                if state.rate != 1 {
+                    Text(rateLabel(state.rate)).font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(.white.opacity(0.2), in: Capsule())
+                }
                 Button {
                     setOrientation(landscape: !fullscreen)
                 } label: {
                     Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 15, weight: .semibold))
-                        .frame(width: 32, height: 32)
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 40, height: 36)
+                        .contentShape(Rectangle())
                 }
                 .accessibilityLabel(fullscreen ? "Exit full screen" : "Full screen")
             }
             .font(.caption.weight(.semibold).monospacedDigit())
-            .shadow(radius: 3)
+            .shadow(color: .black.opacity(0.5), radius: 3)
             Scrubber(time: state.time, duration: state.duration, buffered: state.buffered,
                      chapters: state.chapters.map(\.start), segments: state.segments, scrubbing: $scrubbing) { t in
                 player.seek(to: t)
@@ -348,8 +367,8 @@ struct PlayerControls: View {
     private func scheduleHide() {
         hideTask?.cancel()
         hideTask = Task {
-            try? await Task.sleep(for: .seconds(3.2))
-            guard !Task.isCancelled, state.playing, scrubbing == nil else { return }
+            try? await Task.sleep(for: .seconds(4))
+            guard !Task.isCancelled, state.playing, scrubbing == nil, !showOptions else { return }
             visible = false
         }
     }
@@ -362,6 +381,115 @@ struct PlayerControls: View {
 
     private func shareURL(_ v: VideoItem) -> URL {
         state.time > 5 ? URL(string: "https://youtu.be/\(v.id)?t=\(Int(state.time))")! : v.shareURL
+    }
+}
+
+/// Captions drawn by the app, timed against the interpolated playback position.
+struct CaptionOverlay: View {
+    @ObservedObject var state: PlaybackState
+    let fullscreen: Bool
+    let controlsVisible: Bool
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 0.1)) { context in
+            VStack {
+                Spacer()
+                if let text = CaptionParser.text(at: state.estimatedTime(at: context.date), in: state.cues) {
+                    Text(text)
+                        .font(.system(size: fullscreen ? 20 : 15, weight: .semibold))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        .padding(.horizontal, fullscreen ? 80 : 16)
+                }
+            }
+            .padding(.bottom, controlsVisible && fullscreen ? 82 : (fullscreen ? 24 : 10))
+            // The portrait player is too small for captions and controls at once.
+            .opacity(controlsVisible && !fullscreen ? 0 : 1)
+            .animation(.easeOut(duration: 0.2), value: controlsVisible)
+        }
+    }
+}
+
+/// Speed, quality and captions, in a sheet that works the same in portrait and full screen.
+struct PlayerOptionsSheet: View {
+    @ObservedObject var state: PlaybackState
+    let player: PlayerController
+    @Environment(\.dismiss) private var dismiss
+
+    private let speeds: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Captions") {
+                    row("Off", selected: state.captionTrack == nil) { player.setCaptions(nil) }
+                    if state.captionTracks.isEmpty {
+                        Text("This video has no captions").foregroundStyle(.secondary)
+                    }
+                    ForEach(state.captionTracks) { t in
+                        row(t.name, selected: state.captionTrack == t) { player.setCaptions(t) }
+                    }
+                }
+                Section("Playback speed") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(speeds, id: \.self) { r in
+                                let selected = abs(state.rate - r) < 0.01
+                                Button {
+                                    player.setRate(r)
+                                } label: {
+                                    Text(r == 1 ? "1×" : String(format: "%g×", r))
+                                        .font(.subheadline.weight(.semibold))
+                                        .frame(minWidth: 52, minHeight: 36)
+                                        .foregroundStyle(selected ? Color.white : Color.primary)
+                                        .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                Section("Quality") {
+                    let levels = state.levels.filter { $0 != "auto" }
+                    if levels.isEmpty {
+                        Text("Available once the video is playing").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(levels, id: \.self) { q in
+                            row(qualityName(q), selected: q == state.quality) {
+                                player.setQuality(q)
+                            }
+                        }
+                    }
+                }
+
+            }
+            .tint(.primary)
+            .navigationTitle("Playback")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold) }
+            }
+        }
+    }
+
+    private func qualityName(_ q: String) -> String {
+        if q == "tiny" { return "144p" }
+        return VideoQuality(rawValue: q)?.title ?? q
+    }
+
+    private func row(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(title).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor) }
+            }
+            .contentShape(Rectangle())
+        }
     }
 }
 

@@ -107,6 +107,8 @@ final class AppSettings: ObservableObject {
     @Published var sponsorBlock: Bool { didSet { d.set(sponsorBlock, forKey: "sponsorBlock") } }
     @Published var sponsorCategories: Set<String> { didSet { d.set(Array(sponsorCategories), forKey: "sponsorCategories") } }
     @Published var sponsorNotice: Bool { didSet { d.set(sponsorNotice, forKey: "sponsorNotice") } }
+    /// Caption language to turn on automatically; nil means captions off.
+    @Published var captionsLanguage: String? { didSet { d.set(captionsLanguage, forKey: "captionsLanguage") } }
 
     // Appearance and behaviour
     @Published var theme: AppTheme { didSet { d.set(theme.rawValue, forKey: "theme") } }
@@ -147,6 +149,7 @@ final class AppSettings: ObservableObject {
         sponsorBlock = bool("sponsorBlock", true)
         sponsorCategories = Set(d.stringArray(forKey: "sponsorCategories") ?? SponsorCategory.all.filter(\.defaultOn).map(\.id))
         sponsorNotice = bool("sponsorNotice", true)
+        captionsLanguage = d.string(forKey: "captionsLanguage")
         theme = AppTheme(rawValue: d.string(forKey: "theme") ?? "") ?? .system
         startPage = StartPage(rawValue: d.string(forKey: "startPage") ?? "") ?? .home
         desktopSite = bool("desktopSite", false)

@@ -17,6 +17,8 @@ struct WatchView: View {
                     .gesture(exitFullscreenGesture)
                     .statusBarHidden()
                     .persistentSystemOverlays(.hidden)
+                    // Touches near the screen edges go to the player first (its buttons sit there).
+                    .defersSystemGestures(on: .all)
             } else {
                 VStack(spacing: 0) {
                     Color.black

@@ -605,9 +605,24 @@
     return out === text ? null : out;
   };
 
+  /** Caption files (json3) the player downloads are handed to the app, which draws them natively. */
+  const TIMEDTEXT = /\/api\/timedtext/;
+  const forwardCaptions = (url, text) => {
+    if (!CFG.playerMode || !text || text.length < 10) return;
+    let lang = '', kind = '';
+    try { const u = new URL(url, location.href); lang = u.searchParams.get('lang') || ''; kind = u.searchParams.get('kind') || ''; } catch (_) {}
+    post({ type: 'captions', videoId, lang, kind, body: text });
+  };
+
   window.fetch = new Proxy(N.fetch, {
     apply(target, thisArg, args) {
       const details = requestDetails(args[0], args[1]);
+      if (TIMEDTEXT.test(details.url)) {
+        return Reflect.apply(target, thisArg, args).then((resp) => {
+          try { Reflect.apply(N.respText, resp.clone(), []).then((t) => forwardCaptions(details.url, t)).catch(() => {}); } catch (_) {}
+          return resp;
+        });
+      }
       for (const b of fetchBlockers) {
         if (b.match(details)) {
           return Promise.resolve(new Response(b.body === 'emptyObj' ? '{}' : b.body === 'emptyArr' ? '[]' : '', { status: 200, statusText: 'OK' }));
@@ -647,6 +662,15 @@
     apply(target, xhr, args) {
       const info = xhrInfo.get(xhr);
       if (!info) return Reflect.apply(target, xhr, args);
+      if (TIMEDTEXT.test(info.url)) {
+        xhr.addEventListener('load', () => {
+          try {
+            const rt = xhr.responseType;
+            const t = rt === '' || rt === 'text' ? xhr.responseText : rt === 'json' ? N.stringify(xhr.response) : null;
+            if (t) forwardCaptions(info.url, t);
+          } catch (_) {}
+        });
+      }
       const details = { url: info.url, method: info.method, body: typeof args[0] === 'string' ? args[0] : '' };
       for (const b of xhrBlockers) {
         if (b.match(details)) {
@@ -751,8 +775,7 @@
     #movie_player,.html5-video-player{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-height:none!important;z-index:2147483646!important;background:#000!important;transform:none!important;margin:0!important;border-radius:0!important}
     #movie_player .html5-video-container{position:absolute!important;inset:0!important;width:100%!important;height:100%!important}
     #movie_player video{position:absolute!important;left:0!important;top:0!important;width:100%!important;height:100%!important;object-fit:contain!important}
-    #movie_player > :not(.html5-video-container):not(.ytp-caption-window-container){display:none!important}
-    #movie_player .ytp-caption-window-container{z-index:3!important}
+    #movie_player > :not(.html5-video-container){display:none!important}
     ytm-mobile-topbar-renderer,header,ytm-pivot-bar-renderer,ytm-consent-bump-v2-renderer,ytm-mealbar-promo-renderer,.ytp-unmute,#player-control-overlay,.player-controls-background,ytm-custom-control,.ytm-autonav-bar,ytm-engagement-panel{display:none!important}
   `;
 
@@ -931,6 +954,7 @@
   let wasPlayingBeforeBackground = false;
   let lastMediaPost = 0;
   let userMuted = false;
+  let captionRequest = null;
 
   const currentVideoId = () => {
     try { const d = player && player.getVideoData && player.getVideoData(); if (d && d.video_id) return d.video_id; } catch (_) {}
@@ -966,6 +990,9 @@
     if (speed !== 1) {
       try { video.playbackRate = speed; } catch (_) {}
       try { player.setPlaybackRate && player.setPlaybackRate(speed); } catch (_) {}
+    }
+    if (CFG.playerMode && (!CFG.quality || CFG.quality === 'auto')) {
+      try { player.setPlaybackQualityRange && player.setPlaybackQualityRange('large', 'hd1080'); } catch (_) {}
     }
     if (CFG.quality && CFG.quality !== 'auto') {
       try {
@@ -1062,6 +1089,15 @@
 
   /** Fixed positioning only escapes ancestors without transforms or containment. */
   let geometryLogged = false;
+  if (CFG.debug && CFG.playerMode) {
+    window.addEventListener('resize', () => N.setTimeout(() => {
+      const v = document.querySelector('video'); const pl = document.querySelector('#movie_player');
+      if (!v || !pl) return;
+      const r = (el) => { const b = el.getBoundingClientRect(); return [b.x, b.y, b.width, b.height].map(Math.round).join(','); };
+      const cs = getComputedStyle(v);
+      log('resize win', innerWidth + 'x' + innerHeight, 'player', r(pl), 'video', r(v), 'fit', cs.objectFit, 'intrinsic', v.videoWidth + 'x' + v.videoHeight, 'transform', cs.transform, 'cls', pl.className.split(' ').filter((c) => /fit|fill|cover/.test(c)).join(' '));
+    }, 400));
+  }
   const liftPlayer = () => {
     if (!CFG.playerMode || !player) return;
     if (CFG.debug && !geometryLogged && video && video.videoWidth) {
@@ -1166,12 +1202,53 @@
       if (video) video.muted = !!m;
       try { m ? player.mute() : player.unMute(); } catch (_) {}
     },
-    toggleCaptions() {
+    captionTracks() {
       try {
-        if (player && player.toggleSubtitles) { player.toggleSubtitles(); return true; }
-        if (player && player.toggleSubtitlesOn) { player.toggleSubtitlesOn(); return true; }
-      } catch (_) {}
-      return false;
+        const pr = player && player.getPlayerResponse && player.getPlayerResponse();
+        const tracks = (pr && pr.captions && pr.captions.playerCaptionsTracklistRenderer && pr.captions.playerCaptionsTracklistRenderer.captionTracks) || [];
+        const text = (t) => !t ? '' : t.simpleText || (t.runs ? t.runs.map((r) => r.text).join('') : '');
+        let all = tracks.map((t) => ({ lang: t.languageCode, kind: t.kind || '', name: text(t.name) || t.languageCode }));
+        // Only offer what the player can load (it leaves out auto-generated tracks when real ones exist).
+        let list = [];
+        try { list = player.getOption('captions', 'tracklist') || []; } catch (_) {}
+        if (list.length) {
+          const isAuto = (t) => t.kind === 'asr' || String(t.vss_id || '').startsWith('a.');
+          all = all.filter((a) => list.some((t) => t.languageCode === a.lang && isAuto(t) === (a.kind === 'asr')));
+        }
+        return all;
+      } catch (_) { return []; }
+    },
+    setCaptions(lang, kind) {
+      // Right after a video starts, the player ignores track changes; retry until it takes.
+      const wanted = { id: videoId, lang, kind: kind || '' };
+      captionRequest = wanted;
+      let attempts = 0;
+      const attempt = () => {
+        if (captionRequest !== wanted || videoId !== wanted.id || !player) return;
+        attempts++;
+        try {
+          player.loadModule && player.loadModule('captions');
+          // Prefer the player's own track object: auto-generated tracks need its exact fields.
+          let list = [];
+          try { list = player.getOption('captions', 'tracklist') || []; } catch (_) {}
+          const isAuto = (t) => t.kind === 'asr' || String(t.vss_id || '').startsWith('a.');
+          let track = list.find((t) => t.languageCode === lang && (kind === 'asr') === isAuto(t));
+          if (!track) { track = { languageCode: lang }; if (kind) track.kind = kind; }
+          if (attempts === 1) log('captions list', JSON.stringify(list.map((t) => [t.languageCode, t.kind, t.vss_id])), 'using', JSON.stringify(track).slice(0, 160));
+          player.setOption('captions', 'track', track);
+        } catch (e) { log('setCaptions failed', e); }
+        let current = null;
+        try { current = player.getOption && player.getOption('captions', 'track'); } catch (_) {}
+        const ok = current && current.languageCode === lang && (current.kind || '') === wanted.kind;
+        if (!ok && attempts < 8) N.setTimeout(attempt, 700);
+      };
+      attempt();
+      return true;
+    },
+    captionsOff() {
+      captionRequest = null;
+      try { player && player.setOption && player.setOption('captions', 'track', {}); } catch (_) {}
+      try { player && player.unloadModule && player.unloadModule('captions'); } catch (_) {}
     },
     applyConfig(next) {
       const prev = CFG;
