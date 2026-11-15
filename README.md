@@ -6,7 +6,7 @@
 
 **YouTube without ads, without Shorts, without sponsor reads — as a native iOS 26 app.**
 
-![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.0.0-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
+![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.0.1-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
 
 <img src="docs/screenshots/watch.png" width="230" alt="Watch screen"> <img src="docs/screenshots/search.png" width="230" alt="Search"> <img src="docs/screenshots/comments.png" width="230" alt="Comments"> <img src="docs/screenshots/settings.png" width="230" alt="Settings">
 
@@ -70,7 +70,7 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 
 ## Install
 
-1. Download `Unreel-1.0.0.ipa` from the [latest release](../../releases/latest).
+1. Download `Unreel-1.0.1.ipa` from the [latest release](../../releases/latest).
 2. Sign and install it with your sideloading tool (AirRefresh, Sideloadly, AltStore, …).
    There are no app extensions, so one free-account app ID is enough.
 3. Open Unreel, then sign in from **You ▸ Sign In with Google** if you want your feeds.

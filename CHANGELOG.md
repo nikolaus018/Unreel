@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.1 — 2026-11-15
+
+- The progress line under the video no longer shows in full screen.
+
 ## 1.0.0 — 2026-11-15
 
 First release.
