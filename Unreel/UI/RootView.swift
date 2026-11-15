@@ -27,7 +27,7 @@ struct RootView: View {
                 NavigationStack(path: $app.searchPath) { SearchScreen(settings: settings).routes() }
             }
         }
-        .tabBarMinimizeBehavior(.onScrollDown)
+        .tabBarMinimizeBehavior(.never)
         .tabViewBottomAccessory(isEnabled: player.current != nil) {
             MiniPlayer(player: player, state: player.state)
                 .matchedTransitionSource(id: "player", in: transition)

@@ -45,6 +45,7 @@ struct UnreelApp: App {
         await InnerTube.installConsentCookie()
         await app.refreshAccount()
         await filters.start()
+        app.player.prewarm()
     }
 }
 

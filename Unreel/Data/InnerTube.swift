@@ -61,6 +61,25 @@ actor InnerTube {
         try await post("next", ["videoId": videoId])
     }
 
+    // MARK: Signed-in actions
+
+    enum Rating: String { case like, dislike, removelike }
+
+    func rate(_ videoId: String, _ rating: Rating) async throws {
+        _ = try await post("like/\(rating.rawValue)", ["target": ["videoId": videoId]])
+    }
+
+    func setSubscribed(_ channelId: String, _ subscribed: Bool) async throws {
+        _ = try await post(subscribed ? "subscription/subscribe" : "subscription/unsubscribe", ["channelIds": [channelId]])
+    }
+
+    func setWatchLater(_ videoId: String, _ saved: Bool) async throws {
+        let action: [String: Any] = saved
+            ? ["action": "ACTION_ADD_VIDEO", "addedVideoId": videoId]
+            : ["action": "ACTION_REMOVE_VIDEO_BY_VIDEO_ID", "removedVideoId": videoId]
+        _ = try await post("browse/edit_playlist", ["playlistId": "WL", "actions": [action]])
+    }
+
     func accountMenu() async throws -> J {
         try await post("account/account_menu", [:])
     }

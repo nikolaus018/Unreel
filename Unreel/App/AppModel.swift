@@ -93,6 +93,7 @@ final class AppModel: ObservableObject {
                     details.channel = ChannelItem(id: id, name: video.channelName ?? "", avatar: video.channelAvatar)
                 }
                 watch = details
+                player.updateMetadata(title: details.title, channel: details.channel?.name)
             } catch {
                 if !Task.isCancelled { watchError = error.localizedDescription }
             }
@@ -114,6 +115,70 @@ final class AppModel: ObservableObject {
         guard settings.autoplayNext, let next = watch?.related.first(where: { !$0.isLive }) else { return }
         player.play(next)
         loadWatch(next)
+    }
+
+    // MARK: Signed-in actions (optimistic: update the UI first, roll back on failure)
+
+    @Published private(set) var watchLater: Set<String> = []
+
+    private func requireSignIn() -> Bool {
+        guard signedIn else {
+            show(Toast(icon: "person.crop.circle.badge.exclamationmark", text: "Sign in to do that", actionTitle: "Sign In") { [weak self] in
+                self?.showSignIn = true
+            })
+            return false
+        }
+        return true
+    }
+
+    func rate(_ target: LikeStatus) {
+        guard requireSignIn(), let w = watch else { return }
+        haptic()
+        let previous = w.likeStatus
+        let new: LikeStatus = previous == target ? .none : target
+        watch?.likeStatus = new
+        Task {
+            do {
+                let rating: InnerTube.Rating = new == .liked ? .like : new == .disliked ? .dislike : .removelike
+                try await InnerTube.shared.rate(w.videoId, rating)
+            } catch {
+                if watch?.videoId == w.videoId { watch?.likeStatus = previous }
+                show(Toast(icon: "exclamationmark.triangle", text: "Couldn't save your rating"))
+            }
+        }
+    }
+
+    /// Returns the new state immediately; reverts through `onFailure` if the request fails.
+    func setSubscribed(_ channel: ChannelItem, _ subscribed: Bool, onFailure: @escaping () -> Void = {}) {
+        guard requireSignIn() else { onFailure(); return }
+        haptic()
+        if watch?.channel?.id == channel.id { watch?.subscribed = subscribed }
+        Task {
+            do {
+                try await InnerTube.shared.setSubscribed(channel.id, subscribed)
+                show(Toast(icon: subscribed ? "bell.fill" : "bell.slash", text: subscribed ? "Subscribed to \(channel.name)" : "Unsubscribed"))
+            } catch {
+                if watch?.channel?.id == channel.id { watch?.subscribed = !subscribed }
+                onFailure()
+                show(Toast(icon: "exclamationmark.triangle", text: "Couldn't change your subscription"))
+            }
+        }
+    }
+
+    func toggleWatchLater(_ video: VideoItem) {
+        guard requireSignIn() else { return }
+        haptic()
+        let saved = !watchLater.contains(video.id)
+        if saved { watchLater.insert(video.id) } else { watchLater.remove(video.id) }
+        Task {
+            do {
+                try await InnerTube.shared.setWatchLater(video.id, saved)
+                show(Toast(icon: saved ? "clock.fill" : "clock", text: saved ? "Saved to Watch Later" : "Removed from Watch Later"))
+            } catch {
+                if saved { watchLater.remove(video.id) } else { watchLater.insert(video.id) }
+                show(Toast(icon: "exclamationmark.triangle", text: "Couldn't update Watch Later"))
+            }
+        }
     }
 
     func closePlayer() {

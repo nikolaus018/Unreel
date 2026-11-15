@@ -69,7 +69,11 @@ struct WatchDetails {
     var commentsToken: String?
     var commentsCount: String?
     var commentPreview: String?
+    var likeStatus: LikeStatus = .none
+    var subscribed: Bool?
 }
+
+enum LikeStatus { case none, liked, disliked }
 
 struct Comment: Identifiable, Hashable {
     let id: String
@@ -89,6 +93,7 @@ struct ChannelPage {
     var banner: URL?
     var details: [String] = []
     var tabs: [ChannelTab] = []
+    var subscribed: Bool?
 }
 
 struct ChannelTab: Identifiable, Hashable {

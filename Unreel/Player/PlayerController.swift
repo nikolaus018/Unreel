@@ -19,6 +19,8 @@ final class PlaybackState: ObservableObject {
     @Published var levels: [String] = []
     @Published var quality = ""
     @Published var pageLoading = false
+    /// False until the current video has actually started (the poster shows until then).
+    @Published var hasStarted = false
 }
 
 /// Plays videos with YouTube's own web player inside a web view that shows nothing but the video.
@@ -205,6 +207,7 @@ final class PlayerController: NSObject, ObservableObject {
             return
         }
         current = video
+        state.hasStarted = false
         state.time = start
         state.duration = 0
         state.buffered = 0
@@ -232,6 +235,21 @@ final class PlayerController: NSObject, ObservableObject {
         pageReady = false
         state.pageLoading = true
         webView.load(URLRequest(url: comps.url!))
+    }
+
+    /// Fills in the title/channel once the watch page details arrive (links open with only an ID).
+    func updateMetadata(title: String, channel: String?) {
+        guard var c = current else { return }
+        if c.title.isEmpty || c.title != title { c.title = title }
+        if c.channelName == nil { c.channelName = channel }
+        current = c
+        updateNowPlaying()
+    }
+
+    /// Loads the mobile site once in the background so the first video starts faster.
+    func prewarm() {
+        guard current == nil, webView.url == nil else { return }
+        webView.load(URLRequest(url: URL(string: "https://m.youtube.com/")!))
     }
 
     func stop() {
@@ -348,6 +366,7 @@ final class PlayerController: NSObject, ObservableObject {
             if let levels = body["levels"] as? [String], levels != s.levels { s.levels = levels }
             if let q = body["quality"] as? String, q != s.quality { s.quality = q }
             s.pageLoading = false
+            if s.playing && s.time > 0.05 && !s.isAd && !s.hasStarted { s.hasStarted = true }
             if settings.keepScreenOn { UIApplication.shared.isIdleTimerDisabled = s.playing }
             if settings.lockScreenControls, !s.isAd { updateNowPlaying() }
         case "ended":

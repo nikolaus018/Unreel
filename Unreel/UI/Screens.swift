@@ -63,10 +63,10 @@ struct SubscriptionsView: View {
     var body: some View {
         Group {
             if app.signedIn {
-                FeedList(model: model, style: .cards) {
+                FeedList(model: model, style: .cards, header: { SubscribedChannelsRow() }, empty: {
                     ContentUnavailableView("No New Videos", systemImage: "play.square.stack",
                                            description: Text("Videos from channels you subscribe to show up here."))
-                }
+                })
             } else {
                 SignInPrompt(title: "Your Subscriptions", message: "Sign in to see the latest videos from the channels you follow.", icon: "play.square.stack")
             }
@@ -81,6 +81,47 @@ struct SubscriptionsView: View {
                     .accessibilityLabel("All channels")
                 }
             }
+        }
+    }
+}
+
+/// Horizontal row of subscribed channels, like the top of YouTube's Subscriptions tab.
+struct SubscribedChannelsRow: View {
+    @EnvironmentObject private var app: AppModel
+    @State private var channels: [ChannelItem] = []
+
+    var body: some View {
+        Group {
+            if !channels.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 16) {
+                        ForEach(channels) { c in
+                            Button { app.open(.channel(c.id)) } label: {
+                                VStack(spacing: 6) {
+                                    Avatar(url: c.avatar, size: 58)
+                                    Text(c.name).font(.caption2).lineLimit(1).frame(width: 64).foregroundStyle(.primary)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        NavigationLink(value: Route.browse("FEchannels", "Channels")) {
+                            VStack(spacing: 6) {
+                                Image(systemName: "ellipsis").font(.title3.weight(.semibold))
+                                    .frame(width: 58, height: 58)
+                                    .glassEffect(.regular.interactive(), in: Circle())
+                                Text("All").font(.caption2).foregroundStyle(.secondary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.bottom, 14)
+            }
+        }
+        .task(id: app.feedGeneration) {
+            guard let json = try? await InnerTube.shared.browse("FEchannels") else { return }
+            channels = Parser.feed(json, hideShorts: true).items.compactMap { if case .channel(let c) = $0 { return c } else { return nil } }
         }
     }
 }
@@ -310,6 +351,7 @@ struct SearchScreen: View {
     private func submit(_ term: String) {
         let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         suggestions = []
         submitted = q
         model.setSource(.search(q))
@@ -330,6 +372,7 @@ struct ChannelView: View {
     let id: String
     @State private var page: ChannelPage?
     @State private var tab: ChannelTab?
+    @State private var subscribed: Bool?
     @StateObject private var model: FeedModel
 
     init(id: String, settings: AppSettings) {
@@ -377,6 +420,14 @@ struct ChannelView: View {
                     if !d.isEmpty { Text(d).font(.caption).foregroundStyle(.secondary) }
                 }
                 Spacer(minLength: 0)
+            }
+            if let p = page {
+                SubscribeButton(subscribed: subscribed ?? p.subscribed ?? false) {
+                    let new = !(subscribed ?? p.subscribed ?? false)
+                    subscribed = new
+                    app.setSubscribed(p.channel, new) { subscribed = !new }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if tabs.count > 1 {
                 Picker("Section", selection: Binding(get: { tab ?? tabs.first }, set: { new in

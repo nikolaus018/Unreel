@@ -1043,8 +1043,14 @@
   };
 
   /** Fixed positioning only escapes ancestors without transforms or containment. */
+  let geometryLogged = false;
   const liftPlayer = () => {
     if (!CFG.playerMode || !player) return;
+    if (CFG.debug && !geometryLogged && video && video.videoWidth) {
+      geometryLogged = true;
+      const r = (el) => { const b = el.getBoundingClientRect(); return [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)].join(','); };
+      log('geometry win', innerWidth + 'x' + innerHeight, 'player', r(player), 'video', r(video), 'container', r(video.parentElement), 'style', video.getAttribute('style'));
+    }
     for (let el = player.parentElement; el && el !== document.documentElement; el = el.parentElement) {
       for (const [k, v] of [['transform', 'none'], ['contain', 'none'], ['filter', 'none'], ['will-change', 'auto']]) {
         if (el.style.getPropertyValue(k) !== v) el.style.setProperty(k, v, 'important');

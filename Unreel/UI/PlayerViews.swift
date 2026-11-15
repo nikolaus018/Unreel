@@ -54,6 +54,29 @@ struct PlayerControls: View {
 
     var body: some View {
         ZStack {
+            // Poster until the video actually starts, so there is never a black box.
+            if !state.hasStarted, let v = player.current {
+                Color.clear
+                    .overlay { RemoteImage(url: v.thumbnail) }
+                    .overlay(Color.black.opacity(0.25))
+                    .clipped()
+                    .allowsHitTesting(false)
+                    .transition(.opacity)
+            }
+
+            // Thin progress line while the controls are hidden.
+            if !visible && state.duration > 0 && !state.isAd {
+                VStack {
+                    Spacer()
+                    GeometryReader { geo in
+                        Rectangle().fill(Color.accentColor)
+                            .frame(width: geo.size.width * min(max(state.time / state.duration, 0), 1), height: 2.5)
+                    }
+                    .frame(height: 2.5)
+                }
+                .allowsHitTesting(false)
+            }
+
             // Gesture layer: tap toggles controls, double tap on either side seeks.
             HStack(spacing: 0) {
                 gestureZone(forward: false)
@@ -84,7 +107,7 @@ struct PlayerControls: View {
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .glassEffect(.regular, in: Capsule())
                     .allowsHitTesting(false)
-            } else if state.waiting && state.playing || (state.pageLoading && state.time == 0) {
+            } else if (state.waiting && state.playing) || !state.hasStarted {
                 ProgressView().controlSize(.large).tint(.white).allowsHitTesting(false)
             }
 
@@ -93,6 +116,7 @@ struct PlayerControls: View {
             }
         }
         .animation(.easeInOut(duration: 0.2), value: visible)
+        .animation(.easeOut(duration: 0.3), value: state.hasStarted)
         .animation(.easeOut(duration: 0.25), value: seekFeedback?.id)
         .onAppear { scheduleHide() }
         .onChange(of: state.playing) { _, playing in if playing { scheduleHide() } else { show() } }
@@ -202,7 +226,7 @@ struct PlayerControls: View {
                     .frame(width: 72, height: 72)
             }
             .glassEffect(.clear.interactive(), in: Circle())
-            .opacity(state.waiting && state.playing ? 0 : 1)
+            .opacity((state.waiting && state.playing) || !state.hasStarted ? 0 : 1)
 
             Button { player.seek(by: 10); show() } label: {
                 Image(systemName: "goforward.10").font(.system(size: 24, weight: .semibold)).frame(width: 52, height: 52)

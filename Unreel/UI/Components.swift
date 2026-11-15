@@ -182,6 +182,11 @@ private struct VideoContextMenu: ViewModifier {
             if let id = video.channelId {
                 Button { app.open(.channel(id)) } label: { Label("Go to Channel", systemImage: "person.crop.square") }
             }
+            Button { app.toggleWatchLater(video) } label: {
+                app.watchLater.contains(video.id)
+                    ? Label("Remove from Watch Later", systemImage: "clock.fill")
+                    : Label("Save to Watch Later", systemImage: "clock")
+            }
             ShareLink(item: video.shareURL) { Label("Share", systemImage: "square.and.arrow.up") }
             Button {
                 UIPasteboard.general.url = video.shareURL

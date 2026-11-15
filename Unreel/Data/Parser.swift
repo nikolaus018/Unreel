@@ -188,6 +188,16 @@ enum Parser {
                 details.commentsCount = p["header"]["engagementPanelTitleHeaderRenderer"]["contextualInfo"].text
             }
         }
+        switch root.first("likeStatus").string {
+        case "LIKE": details.likeStatus = .liked
+        case "DISLIKE": details.likeStatus = .disliked
+        default:
+            let toggles = root.first("segmentedLikeDislikeButtonRenderer")
+            if toggles["likeButton"].first("isToggled").bool == true { details.likeStatus = .liked }
+            else if toggles["dislikeButton"].first("isToggled").bool == true { details.likeStatus = .disliked }
+        }
+        details.subscribed = owner.first("subscribeButtonRenderer")["subscribed"].bool
+            ?? root.first("subscribeButtonRenderer")["subscribed"].bool
         details.commentPreview = root.first("commentTeaserCarouselItemViewModel")["commentText"].string
             ?? root.first("carouselItemViewModel").first("content").string
         return details
@@ -254,8 +264,11 @@ enum Parser {
             guard let title = tab["title"].string, let params = tab["endpoint"]["browseEndpoint"]["params"].string else { continue }
             tabs.append(ChannelTab(title: title, params: params))
         }
-        return ChannelPage(channel: ChannelItem(id: id, name: name, avatar: avatar, subtitle: details.first { $0.contains("subscriber") }),
-                           handle: handle, banner: banner, details: details, tabs: tabs)
+        var page = ChannelPage(channel: ChannelItem(id: id, name: name, avatar: avatar, subtitle: details.first { $0.contains("subscriber") }),
+                               handle: handle, banner: banner, details: details, tabs: tabs)
+        page.subscribed = root.first("subscribeButtonRenderer")["subscribed"].bool
+            ?? root.first("subscriptionStateEntity")["subscribed"].bool
+        return page
     }
 
     // MARK: Account
