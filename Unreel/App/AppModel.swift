@@ -29,6 +29,9 @@ final class AppModel: ObservableObject {
 
     @Published var showPlayer = false
     @Published private(set) var queue: PlayQueue?
+    /// "Up next in N seconds" card shown when a video ends.
+    @Published private(set) var upNext: (video: VideoItem, seconds: Int)?
+    private var countdownTask: Task<Void, Never>?
     @Published private(set) var watch: WatchDetails?
     @Published private(set) var watchError: String?
     @Published private(set) var account: Account?
@@ -46,7 +49,7 @@ final class AppModel: ObservableObject {
         self.settings = settings
         self.filters = filters
         self.player = PlayerController(settings: settings, filters: filters)
-        player.onEnded = { [weak self] in self?.playNext(automatic: true) }
+        player.onEnded = { [weak self] in self?.videoEnded() }
         player.onPiPUnavailable = { [weak self] in
             self?.show(Toast(icon: "pip", text: "Picture in Picture isn't available here"))
         }
@@ -71,10 +74,10 @@ final class AppModel: ObservableObject {
     // MARK: Playback
 
     /// Plays a video; with a queue, Next and autoplay follow the queue instead of recommendations.
-    func play(_ video: VideoItem, queue: PlayQueue? = nil) {
+    func play(_ video: VideoItem, queue: PlayQueue? = nil, at time: Double = 0) {
         haptic()
         self.queue = queue
-        start(video)
+        start(video, at: time)
         showPlayer = true
     }
 
@@ -87,8 +90,9 @@ final class AppModel: ObservableObject {
         start(q.items[index])
     }
 
-    private func start(_ video: VideoItem) {
-        player.play(video)
+    private func start(_ video: VideoItem, at time: Double = 0) {
+        cancelUpNext()
+        player.play(video, start: time)
         loadWatch(video)
     }
 
@@ -105,10 +109,17 @@ final class AppModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 var details = Parser.watch(json, videoId: video.id, hideShorts: settings.hideShorts)
                 if details.title.isEmpty { details.title = video.title }
+                // Nothing came back for this ID: the video is gone or private.
+                if details.title.isEmpty && details.channel == nil && details.related.isEmpty {
+                    watch = nil
+                    watchError = "This video isn't available. It may have been removed or made private."
+                    return
+                }
                 if details.channel == nil, let id = video.channelId {
                     details.channel = ChannelItem(id: id, name: video.channelName ?? "", avatar: video.channelAvatar)
                 }
                 watch = details
+                player.state.chapters = details.chapters
                 player.updateMetadata(title: details.title, channel: details.channel?.name)
             } catch {
                 if !Task.isCancelled { watchError = error.localizedDescription }
@@ -127,18 +138,69 @@ final class AppModel: ObservableObject {
         watch?.relatedContinuation = page.continuation
     }
 
-    /// `automatic` is true when a video ended on its own (respects the Autoplay setting).
+    /// What plays after the current video: the queue's next item, or the first recommendation.
+    private func nextCandidate(automatic: Bool) -> VideoItem? {
+        if let q = queue, q.hasNext { return q.items[q.index + 1] }
+        if automatic && !settings.autoplayNext { return nil }
+        return watch?.related.first(where: { !$0.isLive })
+    }
+
     func playNext(automatic: Bool = false) {
-        if var q = queue, q.hasNext {
+        cancelUpNext()
+        guard let next = nextCandidate(automatic: automatic) else { return }
+        advance(to: next)
+    }
+
+    private func advance(to next: VideoItem) {
+        if var q = queue, q.hasNext, q.items[q.index + 1] == next {
             q.index += 1
             queue = q
-            start(q.items[q.index])
-            return
+        } else {
+            queue = nil
         }
-        if automatic && !settings.autoplayNext { return }
-        guard let next = watch?.related.first(where: { !$0.isLive }) else { return }
-        queue = nil
         start(next)
+    }
+
+    /// A video finished: count down on screen, or continue right away in the background/PiP.
+    private func videoEnded() {
+        guard let next = nextCandidate(automatic: true) else { return }
+        let visible = showPlayer && UIApplication.shared.applicationState == .active && !player.state.pip
+        guard visible else { advance(to: next); return }
+        upNext = (next, 5)
+        countdownTask?.cancel()
+        countdownTask = Task { [weak self] in
+            for _ in 0..<5 {
+                try? await Task.sleep(for: .seconds(1))
+                guard !Task.isCancelled, let self, let u = self.upNext else { return }
+                if u.seconds <= 1 { self.upNext = nil; self.advance(to: u.video); return }
+                self.upNext = (u.video, u.seconds - 1)
+            }
+        }
+    }
+
+    func cancelUpNext() {
+        countdownTask?.cancel()
+        upNext = nil
+    }
+
+    func playUpNextNow() {
+        guard let u = upNext else { return }
+        cancelUpNext()
+        advance(to: u.video)
+    }
+
+    /// Inserts a video right after the current one.
+    func enqueueNext(_ video: VideoItem) {
+        guard let current = player.current else { play(video); return }
+        haptic()
+        if var q = queue {
+            q.items.removeAll { $0 == video }
+            q.items.insert(video, at: min(q.index + 1, q.items.count))
+            queue = q
+        } else {
+            queue = PlayQueue(title: "Queue", items: [current, video], index: 0)
+        }
+        show(Toast(icon: "text.line.first.and.arrowtriangle.forward", text: "Plays next"))
     }
 
     var canPlayNext: Bool { (queue?.hasNext ?? false) || !(watch?.related.isEmpty ?? true) }
@@ -208,6 +270,7 @@ final class AppModel: ObservableObject {
     }
 
     func closePlayer() {
+        cancelUpNext()
         player.stop()
         showPlayer = false
         watch = nil
@@ -237,7 +300,8 @@ final class AppModel: ObservableObject {
             if let inner = comps?.queryItems?.first(where: { $0.name == "url" })?.value, let u = URL(string: inner) {
                 url = u
             } else if let v = comps?.queryItems?.first(where: { $0.name == "v" })?.value {
-                url = URL(string: "https://youtu.be/\(v)")!
+                let t = comps?.queryItems?.first(where: { $0.name == "t" })?.value
+                url = URL(string: "https://youtu.be/\(v)" + (t.map { "?t=\($0)" } ?? ""))!
             }
         }
         guard let comps = URLComponents(url: url, resolvingAgainstBaseURL: false), let host = comps.host?.lowercased() else { return }
@@ -250,7 +314,7 @@ final class AppModel: ObservableObject {
             videoId = path.split(separator: "/").dropFirst().first.map(String.init)
         }
         if let videoId, !videoId.isEmpty {
-            play(VideoItem(id: videoId, title: ""))
+            play(VideoItem(id: videoId, title: ""), at: Self.parseTimestamp(q("t") ?? q("start")))
             return
         }
         if let list = q("list") { open(.playlist(list, "Playlist")); return }
@@ -263,6 +327,25 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// "90", "90s", "1m30s", "1h2m3s" -> seconds.
+    static func parseTimestamp(_ raw: String?) -> Double {
+        guard let raw, !raw.isEmpty else { return 0 }
+        if let n = Double(raw) { return n }
+        var total = 0.0, number = ""
+        for ch in raw {
+            if ch.isNumber { number.append(ch); continue }
+            let n = Double(number) ?? 0
+            number = ""
+            switch ch {
+            case "h": total += n * 3600
+            case "m": total += n * 60
+            case "s": total += n
+            default: break
+            }
+        }
+        return total + (Double(number) ?? 0)
     }
 
     // MARK: Account

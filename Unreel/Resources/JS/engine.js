@@ -206,6 +206,20 @@
     return ads;
   };
 
+  /** Tells the app when YouTube refuses to play a video, with YouTube's own reason. */
+  const checkPlayability = (o) => {
+    try {
+      const ps = o && (o.playabilityStatus || (o.playerResponse && o.playerResponse.playabilityStatus));
+      if (!ps || !ps.status || ps.status === 'OK') return;
+      const vd = o.videoDetails || (o.playerResponse && o.playerResponse.videoDetails) || {};
+      const text = (t) => !t ? '' : t.simpleText || (t.runs ? t.runs.map((r) => r.text).join('') : '');
+      const err = ps.errorScreen && (ps.errorScreen.playerErrorMessageRenderer || ps.errorScreen.playerLegacyDesktopYpcOfferRenderer || {});
+      const reason = [ps.reason, text(err && err.reason), text(err && err.subreason)].filter(Boolean).join('\n');
+      log('unplayable', ps.status, reason);
+      post({ type: 'unplayable', videoId: vd.videoId || null, status: ps.status, reason });
+    } catch (_) {}
+  };
+
   const looksLikeYT = (o) => {
     if (!o || typeof o !== 'object') return false;
     if (Array.isArray(o)) return o.length > 0 && o.length < 20 && o.some((e) => e && typeof e === 'object' && ('playerResponse' in e || 'response' in e));
@@ -581,6 +595,7 @@
         try {
           const obj = N.parse(out);
           let changed = false;
+          if (/\/player(\?|$)/.test(details.url.split('#')[0])) checkPlayability(obj);
           if (isAPI) { const n = cleanData(obj); if (n) { countBlocked(n); log('cleaned', n, 'ad objects from', details.url.split('?')[0]); } changed = true; }
           for (const p of activePruners) if (p.prune(obj)) changed = true;
           if (changed) out = N.stringify(obj);
@@ -675,7 +690,10 @@
   // Embedded initial data ("var ytInitialPlayerResponse = {...}").
   for (const name of ['ytInitialPlayerResponse', 'ytInitialData', 'ytInitialReelWatchSequenceResponse']) {
     hookAssign(window, name, (v) => {
-      if (v && typeof v === 'object') { const n = cleanData(v); countBlocked(n); applyObjectPruners(v); log('initial', name, 'cleaned', n); }
+      if (v && typeof v === 'object') {
+        if (name === 'ytInitialPlayerResponse') checkPlayability(v);
+        const n = cleanData(v); countBlocked(n); applyObjectPruners(v); log('initial', name, 'cleaned', n);
+      }
       return v;
     });
   }

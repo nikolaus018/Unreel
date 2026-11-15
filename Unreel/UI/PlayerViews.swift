@@ -127,7 +127,21 @@ struct PlayerControls: View {
                 .allowsHitTesting(false)
             }
 
-            if state.isAd {
+            if let reason = state.unplayable {
+                VStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 30))
+                    Text("Video unavailable").font(.headline)
+                    Text(reason).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.8)).lineLimit(4)
+                    Button("Close") { app.closePlayer() }
+                        .buttonStyle(.glass)
+                        .controlSize(.small)
+                        .padding(.top, 4)
+                }
+                .foregroundStyle(.white)
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black.opacity(0.75))
+            } else if state.isAd {
                 Label("Skipping ad…", systemImage: "forward.fill")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
@@ -138,12 +152,18 @@ struct PlayerControls: View {
                 ProgressView().controlSize(.large).tint(.white).allowsHitTesting(false)
             }
 
-            if visible && !state.isAd {
+            if visible && !state.isAd && state.unplayable == nil && app.upNext == nil {
                 controls.transition(.opacity)
+            }
+
+            if let up = app.upNext {
+                UpNextCard(video: up.video, seconds: up.seconds, compact: !fullscreen)
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
             }
         }
         .animation(.easeInOut(duration: 0.2), value: visible)
         .animation(.easeOut(duration: 0.3), value: state.hasStarted)
+        .animation(.spring(duration: 0.3), value: app.upNext?.video.id)
         .animation(.easeOut(duration: 0.25), value: seekFeedback?.id)
         .animation(.easeOut(duration: 0.15), value: boosting)
         .onChange(of: boosting) { _, on in
@@ -279,6 +299,9 @@ struct PlayerControls: View {
                 Text(format(scrubbing ?? state.time))
                 Text("/").foregroundStyle(.white.opacity(0.6))
                 Text(format(state.duration)).foregroundStyle(.white.opacity(0.8))
+                if let ch = state.chapter(at: scrubbing ?? state.time) {
+                    Text("· \(ch.title)").lineLimit(1).foregroundStyle(.white.opacity(0.9))
+                }
                 Spacer()
                 Button {
                     setOrientation(landscape: !fullscreen)
@@ -291,7 +314,8 @@ struct PlayerControls: View {
             }
             .font(.caption.weight(.semibold).monospacedDigit())
             .shadow(radius: 3)
-            Scrubber(time: state.time, duration: state.duration, buffered: state.buffered, scrubbing: $scrubbing) { t in
+            Scrubber(time: state.time, duration: state.duration, buffered: state.buffered,
+                     chapters: state.chapters.map(\.start), segments: state.segments, scrubbing: $scrubbing) { t in
                 player.seek(to: t)
                 scheduleHide()
             }
@@ -356,8 +380,11 @@ struct Scrubber: View {
     let time: Double
     let duration: Double
     let buffered: Double
+    var chapters: [Double] = []
+    var segments: [SponsorSegment] = []
     @Binding var scrubbing: Double?
     let onCommit: (Double) -> Void
+    @State private var lastChapter: Int?
 
     var body: some View {
         GeometryReader { geo in
@@ -365,24 +392,42 @@ struct Scrubber: View {
             let current = scrubbing ?? time
             let p = duration > 0 ? min(max(current / duration, 0), 1) : 0
             let b = duration > 0 ? min(max(buffered / duration, 0), 1) : 0
+            let h: CGFloat = scrubbing == nil ? 4 : 7
             ZStack(alignment: .leading) {
                 Capsule().fill(.white.opacity(0.25))
                 Capsule().fill(.white.opacity(0.4)).frame(width: w * b)
                 Capsule().fill(Color.accentColor).frame(width: w * p)
+                // SponsorBlock segments
+                if duration > 0 {
+                    ForEach(segments, id: \.self) { seg in
+                        Rectangle().fill(Color(red: 0, green: 0.83, blue: 0).opacity(0.9))
+                            .frame(width: max(2, w * (seg.end - seg.start) / duration))
+                            .offset(x: w * seg.start / duration)
+                    }
+                    // Chapter gaps
+                    ForEach(chapters.dropFirst(), id: \.self) { start in
+                        Rectangle().fill(.black.opacity(0.7)).frame(width: 2).offset(x: w * start / duration - 1)
+                    }
+                }
                 Circle()
                     .fill(.white)
                     .frame(width: scrubbing == nil ? 12 : 18, height: scrubbing == nil ? 12 : 18)
                     .shadow(radius: 2)
                     .offset(x: w * p - (scrubbing == nil ? 6 : 9))
             }
-            .frame(height: scrubbing == nil ? 4 : 7)
+            .frame(height: h)
+            .clipShape(Capsule())
             .frame(maxHeight: .infinity)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { g in
                         guard duration > 0 else { return }
-                        scrubbing = min(max(g.location.x / w, 0), 1) * duration
+                        let t = min(max(g.location.x / w, 0), 1) * duration
+                        scrubbing = t
+                        // A light tick when crossing into another chapter.
+                        let idx = chapters.lastIndex { $0 <= t }
+                        if idx != lastChapter { lastChapter = idx; UISelectionFeedbackGenerator().selectionChanged() }
                     }
                     .onEnded { _ in
                         if let s = scrubbing { onCommit(s) }
@@ -392,6 +437,50 @@ struct Scrubber: View {
             .animation(.spring(duration: 0.2), value: scrubbing == nil)
         }
         .frame(height: 22)
+    }
+}
+
+/// End-of-video card: "Up next in 5" with Cancel and Play Now.
+struct UpNextCard: View {
+    @EnvironmentObject private var app: AppModel
+    let video: VideoItem
+    let seconds: Int
+    let compact: Bool
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.6)
+            HStack(spacing: compact ? 12 : 18) {
+                RemoteImage(url: video.smallThumbnail)
+                    .frame(width: compact ? 120 : 200, height: compact ? 68 : 112)
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay {
+                        ZStack {
+                            Circle().stroke(.white.opacity(0.3), lineWidth: 3)
+                            Circle().trim(from: 0, to: CGFloat(seconds) / 5)
+                                .stroke(.white, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                                .animation(.linear(duration: 1), value: seconds)
+                            Text("\(seconds)").font(.headline.monospacedDigit())
+                        }
+                        .frame(width: 38, height: 38)
+                        .foregroundStyle(.white)
+                    }
+                VStack(alignment: .leading, spacing: compact ? 6 : 10) {
+                    Text("Up next").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                    Text(video.title).font(compact ? .subheadline.weight(.semibold) : .headline).lineLimit(2).foregroundStyle(.white)
+                    HStack(spacing: 8) {
+                        Button("Cancel") { app.cancelUpNext() }
+                            .buttonStyle(.glass)
+                        Button("Play Now") { app.playUpNextNow() }
+                            .buttonStyle(.glassProminent)
+                    }
+                    .controlSize(compact ? .small : .regular)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(compact ? 14 : 40)
+        }
     }
 }
 

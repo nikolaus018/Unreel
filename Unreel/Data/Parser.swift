@@ -177,6 +177,13 @@ enum Parser {
         details.date = header["publishDate"].text
         details.likes = header["factoid"].array.first?.first("value").text
         let body = root.first("expandableVideoDescriptionBodyRenderer")
+        var seenStarts = Set<Int>()
+        details.chapters = root.all("macroMarkersListItemRenderer").compactMap { m in
+            guard let title = m["title"].text, let start = m["onTap"]["watchEndpoint"]["startTimeSeconds"].int,
+                  seenStarts.insert(start).inserted else { return nil }
+            return Chapter(title: title, start: Double(start), thumbnail: m["thumbnail"].thumbnailURL)
+        }.sorted { $0.start < $1.start }
+        if details.chapters.count < 2 { details.chapters = [] }
         details.descriptionLinks = textLinks(body["attributedDescriptionBodyText"]["commandRuns"], videoId: videoId)
         details.description = body["attributedDescriptionBodyText"]["content"].string
             ?? body["attributedDescription"]["content"].string

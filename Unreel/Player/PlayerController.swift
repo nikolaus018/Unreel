@@ -21,6 +21,12 @@ final class PlaybackState: ObservableObject {
     @Published var pageLoading = false
     /// False until the current video has actually started (the poster shows until then).
     @Published var hasStarted = false
+    /// Why YouTube won't play the current video (private, age-restricted, blocked…).
+    @Published var unplayable: String?
+    @Published var segments: [SponsorSegment] = []
+    @Published var chapters: [Chapter] = []
+
+    func chapter(at t: Double) -> Chapter? { chapters.last { $0.start <= t } }
 }
 
 /// Plays videos with YouTube's own web player inside a web view that shows nothing but the video.
@@ -222,6 +228,9 @@ final class PlayerController: NSObject, ObservableObject {
         }
         current = video
         state.hasStarted = false
+        state.unplayable = nil
+        state.segments = []
+        state.chapters = []
         state.time = start
         state.duration = 0
         state.buffered = 0
@@ -387,6 +396,12 @@ final class PlayerController: NSObject, ObservableObject {
             if s.playing && s.time > 0.05 && !s.isAd && !s.hasStarted { s.hasStarted = true }
             if settings.keepScreenOn { UIApplication.shared.isIdleTimerDisabled = s.playing }
             if settings.lockScreenControls, !s.isAd { updateNowPlaying() }
+        case "unplayable":
+            // Error responses often have no videoDetails; a report without an ID is about the current video.
+            let id = body["videoId"] as? String
+            if id == nil || id == current?.id {
+                state.unplayable = (body["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "This video can't be played."
+            }
         case "ended":
             if let id = body["videoId"] as? String, id == current?.id { onEnded?() }
         case "blocked":
@@ -403,6 +418,7 @@ final class PlayerController: NSObject, ObservableObject {
     fileprivate func handleAsync(_ body: [String: Any]) async -> Any? {
         guard body["type"] as? String == "sponsorblock", let id = body["videoId"] as? String, settings.sponsorBlock else { return [] }
         let segments = await sponsorBlock.segments(for: id, categories: settings.sponsorCategories.sorted())
+        if id == current?.id { state.segments = segments.map { SponsorSegment(start: $0.start, end: $0.end, category: $0.category) } }
         return segments.map { ["start": $0.start, "end": $0.end, "category": $0.category, "uuid": $0.uuid] }
     }
 }

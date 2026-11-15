@@ -112,7 +112,8 @@ struct WatchView: View {
                         if let q = app.queue { queueSection(q) }
                         if !settings.hideRelated, !w.related.isEmpty { upNext(w) }
                     } else if let error = app.watchError {
-                        ContentUnavailableView("Couldn't Load Details", systemImage: "exclamationmark.triangle", description: Text(error))
+                        ContentUnavailableView(error.contains("isn't available") ? "Video Unavailable" : "Couldn't Load Details",
+                                           systemImage: "exclamationmark.triangle", description: Text(error))
                     }
                 }
                 .padding(.bottom, 40)
@@ -332,6 +333,8 @@ private extension View {
 }
 
 struct DescriptionSheet: View {
+    @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
     let details: WatchDetails
 
     var body: some View {
@@ -343,6 +346,36 @@ struct DescriptionSheet: View {
                         stat(details.likes, "Likes")
                         stat(details.views?.replacingOccurrences(of: " views", with: ""), "Views")
                         stat(details.date, "Published")
+                    }
+                    if !details.chapters.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("Chapters").font(.headline)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(alignment: .top, spacing: 12) {
+                                    ForEach(details.chapters) { ch in
+                                        Button {
+                                            app.player.seek(to: ch.start)
+                                            dismiss()
+                                        } label: {
+                                            VStack(alignment: .leading, spacing: 6) {
+                                                Color.clear.aspectRatio(16 / 9, contentMode: .fit)
+                                                    .overlay { RemoteImage(url: ch.thumbnail) }
+                                                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                                    .overlay(alignment: .bottomTrailing) {
+                                                        Text(format(ch.start)).font(.caption2.weight(.semibold).monospacedDigit())
+                                                            .foregroundStyle(.white).padding(.horizontal, 4).padding(.vertical, 1)
+                                                            .background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 4)).padding(4)
+                                                    }
+                                                Text(ch.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                                            }
+                                            .frame(width: 140)
+                                        }
+                                        .buttonStyle(.plain)
+                                    }
+                                }
+                            }
+                            .scrollClipDisabled()
+                        }
                     }
                     if let d = details.description, !d.isEmpty {
                         Text(linkified(d, links: details.descriptionLinks)).font(.subheadline).textSelection(.enabled)

@@ -207,6 +207,9 @@ private struct VideoContextMenu: ViewModifier {
     func body(content: Content) -> some View {
         content.contextMenu {
             Button { app.play(video) } label: { Label("Play", systemImage: "play.fill") }
+            if app.player.current != nil, app.player.current?.id != video.id {
+                Button { app.enqueueNext(video) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
+            }
             if let id = video.channelId {
                 Button { app.open(.channel(id)) } label: { Label("Go to Channel", systemImage: "person.crop.square") }
             }

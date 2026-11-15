@@ -66,3 +66,13 @@ final class ParserTests: XCTestCase {
         XCTAssertNil(InnerTube.authorization([]))
     }
 }
+
+final class TimestampTests: XCTestCase {
+    @MainActor func testParse() {
+        XCTAssertEqual(AppModel.parseTimestamp("90"), 90)
+        XCTAssertEqual(AppModel.parseTimestamp("90s"), 90)
+        XCTAssertEqual(AppModel.parseTimestamp("1m30s"), 90)
+        XCTAssertEqual(AppModel.parseTimestamp("1h2m3s"), 3723)
+        XCTAssertEqual(AppModel.parseTimestamp(nil), 0)
+    }
+}

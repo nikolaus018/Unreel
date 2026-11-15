@@ -75,6 +75,20 @@ struct WatchDetails {
     var subscribed: Bool?
     /// Real targets for the (shortened) links and timestamps in the description.
     var descriptionLinks: [TextLink] = []
+    var chapters: [Chapter] = []
+}
+
+struct Chapter: Hashable, Identifiable {
+    var id: Double { start }
+    let title: String
+    let start: Double
+    let thumbnail: URL?
+}
+
+struct SponsorSegment: Hashable {
+    let start: Double
+    let end: Double
+    let category: String
 }
 
 /// A link inside text, located by UTF-16 offset (how YouTube reports it).

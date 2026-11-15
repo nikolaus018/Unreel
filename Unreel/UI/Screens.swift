@@ -338,6 +338,7 @@ struct SearchScreen: View {
     @State private var query = ""
     @State private var submitted: String?
     @State private var suggestions: [String] = []
+    @State private var filter: SearchFilter = .all
     @AppStorage("recentSearches") private var recentData = Data()
     @StateObject private var model: FeedModel
 
@@ -350,9 +351,9 @@ struct SearchScreen: View {
     var body: some View {
         Group {
             if submitted != nil {
-                FeedList(model: model, style: .rows) {
+                FeedList(model: model, style: .rows, header: { filterChips }, empty: {
                     ContentUnavailableView.search(text: submitted ?? "")
-                }
+                })
                 .id(submitted)
             } else {
                 List {
@@ -367,7 +368,11 @@ struct SearchScreen: View {
                                     query = term
                                     submit(term)
                                 } label: {
-                                    Label(term, systemImage: "clock.arrow.circlepath").foregroundStyle(.primary)
+                                    Label {
+                                        Text(term).foregroundStyle(.primary)
+                                    } icon: {
+                                        Image(systemName: "clock.arrow.circlepath").foregroundStyle(.secondary)
+                                    }
                                 }
                             }
                             .onDelete { idx in saveRecent(recent.enumerated().filter { !idx.contains($0.offset) }.map(\.element)) }
@@ -412,13 +417,63 @@ struct SearchScreen: View {
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         suggestions = []
         submitted = q
-        model.setSource(.search(q))
+        model.setSource(.search(q, params: filter.params))
         Task { await model.reload() }
         saveRecent([q] + recent.filter { $0.caseInsensitiveCompare(q) != .orderedSame })
     }
 
+    private var filterChips: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(SearchFilter.allCases) { f in
+                    Button {
+                        guard f != filter, let q = submitted else { return }
+                        filter = f
+                        app.haptic()
+                        model.setSource(.search(q, params: f.params))
+                        Task { await model.reload() }
+                    } label: {
+                        Group {
+                            if f == filter {
+                                Text(f.title)
+                                    .padding(.horizontal, 14).frame(height: 32)
+                                    .foregroundStyle(Color(uiColor: .systemBackground))
+                                    .background(Color.primary, in: Capsule())
+                            } else {
+                                Text(f.title)
+                                    .padding(.horizontal, 14).frame(height: 32)
+                                    .glassEffect(.regular.interactive(), in: Capsule())
+                            }
+                        }
+                        .font(.subheadline.weight(.semibold))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .scrollClipDisabled()
+        .padding(.bottom, 12)
+    }
+
     private func saveRecent(_ list: [String]) {
         recentData = (try? JSONEncoder().encode(Array(list.prefix(15)))) ?? Data()
+    }
+}
+
+enum SearchFilter: String, CaseIterable, Identifiable {
+    case all, videos, channels, playlists, live
+    var id: String { rawValue }
+    var title: String { rawValue == "all" ? "All" : rawValue.capitalized }
+    /// InnerTube search parameters (protobuf, URL-encoded as the web client sends them).
+    var params: String? {
+        switch self {
+        case .all: nil
+        case .videos: "EgIQAQ%3D%3D"
+        case .channels: "EgIQAg%3D%3D"
+        case .playlists: "EgIQAw%3D%3D"
+        case .live: "EgJAAQ%3D%3D"
+        }
     }
 }
 

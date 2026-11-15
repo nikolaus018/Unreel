@@ -5,7 +5,7 @@ import SwiftUI
 final class FeedModel: ObservableObject {
     enum Source: Equatable {
         case browse(String, params: String? = nil)
-        case search(String)
+        case search(String, params: String? = nil)
 
         var endpoint: String {
             switch self {
@@ -78,8 +78,8 @@ final class FeedModel: ObservableObject {
                         if !webPage.items.isEmpty { json = web; page = webPage; client = .web }
                     }
                 }
-            case .search(let q):
-                json = try await InnerTube.shared.search(q)
+            case .search(let q, let params):
+                json = try await InnerTube.shared.search(q, params: params)
                 page = Parser.feed(json, hideShorts: hideShorts())
             }
             firstPage = json
