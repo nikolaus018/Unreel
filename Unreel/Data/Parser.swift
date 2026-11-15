@@ -28,9 +28,11 @@ enum Parser {
                     if skippedKeys.contains(key) { continue }
                     let j = J(value)
                     switch key {
-                    case "videoWithContextRenderer", "compactVideoRenderer", "videoRenderer", "gridVideoRenderer",
+                    case "videoWithContextRenderer", "compactVideoRenderer", "videoRenderer", "gridVideoRenderer", "videoCardRenderer",
                          "playlistVideoRenderer", "playlistPanelVideoRenderer":
-                        if let v = video(j), !(hideShorts && v.isShort) { add(.video(v)) }
+                        // Deleted/private entries in playlists have no channel and a bracketed title.
+                        if let v = video(j), !(hideShorts && v.isShort),
+                           !(v.channelName == nil && v.title.hasPrefix("[") && v.title.hasSuffix("]")) { add(.video(v)) }
                     case "reelItemRenderer", "shortsLockupViewModel":
                         if !hideShorts, let v = short(j, key: key) { add(.video(v)) }
                     case "reelShelfRenderer":
@@ -256,7 +258,10 @@ enum Parser {
                     let j = J(value)
                     switch key {
                     case "commentThreadRenderer":
-                        if let c = comment(j.first("commentRenderer")) { out.append(c) }
+                        if var c = comment(j.first("commentRenderer")) {
+                            c.repliesToken = j["replies"].first("token").string
+                            out.append(c)
+                        }
                     case "commentRenderer":
                         if let c = comment(j) { out.append(c) }
                     case "continuationItemRenderer":

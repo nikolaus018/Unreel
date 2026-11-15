@@ -51,6 +51,10 @@ struct PlayerControls: View {
     @State private var scrubbing: Double?
     @State private var seekFeedback: (forward: Bool, id: Int)?
     @State private var feedbackCounter = 0
+    @State private var seekStack = 0
+    @State private var lastSeekTap: (forward: Bool, at: Date)?
+    @GestureState private var boosting = false
+    @State private var rateBeforeBoost: Double = 1
 
     var body: some View {
         ZStack {
@@ -82,17 +86,40 @@ struct PlayerControls: View {
                 gestureZone(forward: false)
                 gestureZone(forward: true)
             }
+            .simultaneousGesture(
+                LongPressGesture(minimumDuration: 0.4)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .updating($boosting) { value, state, _ in
+                        if case .second(true, _) = value { state = true }
+                    }
+            )
+
+            if boosting {
+                VStack {
+                    Label("2×", systemImage: "forward.fill")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14).padding(.vertical, 7)
+                        .glassEffect(.regular, in: Capsule())
+                        .padding(.top, 14)
+                    Spacer()
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .allowsHitTesting(false)
+            }
 
             if let fb = seekFeedback {
                 HStack {
                     if fb.forward { Spacer() }
-                    Label(fb.forward ? "10s" : "10s", systemImage: fb.forward ? "goforward.10" : "gobackward.10")
-                        .labelStyle(.iconOnly)
-                        .font(.system(size: 30, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(22)
-                        .background(.black.opacity(0.35), in: Circle())
-                        .padding(.horizontal, 50)
+                    VStack(spacing: 4) {
+                        Image(systemName: fb.forward ? "forward.fill" : "backward.fill")
+                            .font(.system(size: 26, weight: .semibold))
+                        Text("\(seekStack) seconds").font(.caption.weight(.semibold)).monospacedDigit()
+                    }
+                    .foregroundStyle(.white)
+                    .frame(width: 110, height: 110)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .padding(.horizontal, 40)
                     if !fb.forward { Spacer() }
                 }
                 .transition(.opacity)
@@ -118,6 +145,17 @@ struct PlayerControls: View {
         .animation(.easeInOut(duration: 0.2), value: visible)
         .animation(.easeOut(duration: 0.3), value: state.hasStarted)
         .animation(.easeOut(duration: 0.25), value: seekFeedback?.id)
+        .animation(.easeOut(duration: 0.15), value: boosting)
+        .onChange(of: boosting) { _, on in
+            if on {
+                rateBeforeBoost = state.rate
+                player.setRate(2)
+                app.haptic()
+                visible = false
+            } else {
+                player.setRate(rateBeforeBoost)
+            }
+        }
         .onAppear { scheduleHide() }
         .onChange(of: state.playing) { _, playing in if playing { scheduleHide() } else { show() } }
     }
@@ -263,11 +301,18 @@ struct PlayerControls: View {
     // MARK: Helpers
 
     private func doubleTapSeek(forward: Bool) {
+        // Repeated double taps in the same direction add up, like in YouTube.
+        if let last = lastSeekTap, last.forward == forward, Date().timeIntervalSince(last.at) < 1.0 {
+            seekStack += 10
+        } else {
+            seekStack = 10
+        }
+        lastSeekTap = (forward, Date())
         player.seek(by: forward ? 10 : -10)
         feedbackCounter += 1
         seekFeedback = (forward, feedbackCounter)
         let id = feedbackCounter
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { if seekFeedback?.id == id { seekFeedback = nil } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { if seekFeedback?.id == id { seekFeedback = nil } }
         app.haptic()
     }
 
@@ -382,11 +427,15 @@ struct MiniPlayer: View {
             }
             .accessibilityLabel(state.playing ? "Pause" : "Play")
             if placement != .inline {
-                Button { app.playNext() } label: {
+                Button { app.haptic(); app.playNext() } label: {
                     Image(systemName: "forward.fill").frame(width: 32, height: 32)
                 }
                 .accessibilityLabel("Next video")
-                .disabled(app.watch?.related.isEmpty ?? true)
+                .disabled(!app.canPlayNext)
+                Button { app.closePlayer() } label: {
+                    Image(systemName: "xmark").font(.body.weight(.bold)).frame(width: 28, height: 32)
+                }
+                .accessibilityLabel("Close player")
             }
         }
         .font(.body.weight(.semibold))
@@ -394,5 +443,10 @@ struct MiniPlayer: View {
         .padding(.horizontal, 14)
         .contentShape(Rectangle())
         .onTapGesture { app.showPlayer = true }
+        .contextMenu {
+            Button { app.showPlayer = true } label: { Label("Open Player", systemImage: "arrow.up.left.and.arrow.down.right") }
+            Button { app.player.togglePiP() } label: { Label("Picture in Picture", systemImage: "pip.enter") }
+            Button(role: .destructive) { app.closePlayer() } label: { Label("Close", systemImage: "xmark") }
+        }
     }
 }

@@ -11,7 +11,7 @@ struct HomeView: View {
     }
 
     var body: some View {
-        FeedList(model: model, style: .cards) {
+        FeedList(model: model, style: .cards, header: { ExploreChips() }, empty: {
             ContentUnavailableView {
                 Label("Nothing Here Yet", systemImage: "play.rectangle.on.rectangle")
             } description: {
@@ -25,9 +25,40 @@ struct HomeView: View {
                     Button("Sign In") { app.showSignIn = true }.buttonStyle(.glass)
                 }
             }
-        }
+        })
         .navigationTitle("Home")
         .toolbar { AccountToolbarItem() }
+    }
+}
+
+/// YouTube's Explore destinations as chips above the Home feed.
+struct ExploreChips: View {
+    private let chips: [(title: String, icon: String, route: Route)] = [
+        ("Music", "music.note", .browse("UC-9-kyTW8ZkZNDHQJ6FgpwQ", "Music")),
+        ("Gaming", "gamecontroller", .browse("UCOpNcN46UbXVtpKMrmU4Abg", "Gaming")),
+        ("Podcasts", "mic", .browse("FEpodcasts_destination", "Podcasts")),
+        ("News", "newspaper", .browse("UCYfdidRxbB8Qhf0Nx7ioOYw", "News")),
+        ("Sports", "sportscourt", .browse("UCEgdi0XIXXZ-qJOFPf4JSKw", "Sports")),
+    ]
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(chips, id: \.title) { chip in
+                    NavigationLink(value: chip.route) {
+                        Label(chip.title, systemImage: chip.icon)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, 14)
+                            .frame(height: 34)
+                            .glassEffect(.regular.interactive(), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.horizontal, 16)
+        }
+        .scrollClipDisabled()
+        .padding(.bottom, 14)
     }
 }
 
@@ -218,7 +249,7 @@ struct BrowseView: View {
         let filter: ((FeedItem) -> Bool)? = browseId == "FElibrary" ? { if case .playlist = $0 { true } else { false } } : nil
         _model = StateObject(wrappedValue: FeedModel(.browse(browseId), hideShorts: { settings.hideShorts }, filter: filter))
         self.title = title
-        style = .rows
+        style = browseId.hasPrefix("FE") && browseId != "FEpodcasts_destination" ? .rows : .cards
     }
 
     var body: some View {
@@ -242,31 +273,55 @@ struct PlaylistView: View {
         self.title = title
     }
 
+    private var videos: [VideoItem] {
+        model.items.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
+    }
+
     var body: some View {
-        FeedList(model: model, style: .rows, header: {
-            if let first = firstVideo {
-                Button {
-                    app.play(first)
-                } label: {
-                    Label("Play All", systemImage: "play.fill")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 4)
-                }
-                .buttonStyle(.glassProminent)
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-            }
-        }, empty: {
+        FeedList(model: model, style: .rows, header: { header }, empty: {
             ContentUnavailableView("Empty Playlist", systemImage: "list.bullet")
         })
+        .environment(\.playAction) { video in
+            let list = videos
+            app.play(video, queue: PlayQueue(title: playlistTitle, items: list, index: list.firstIndex(of: video) ?? 0))
+        }
         .navigationTitle(playlistTitle)
         .navigationBarTitleDisplayMode(.inline)
     }
 
-    private var firstVideo: VideoItem? {
-        for item in model.items { if case .video(let v) = item { return v } }
-        return nil
+    @ViewBuilder
+    private var header: some View {
+        if let first = videos.first {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
+                    Thumbnail(video: first, cornerRadius: 12, small: true)
+                        .frame(width: 128)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(playlistTitle).font(.title3.weight(.bold)).lineLimit(3)
+                        Text("\(videos.count)\(model.canLoadMore ? "+" : "") videos").font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 0)
+                }
+                HStack(spacing: 10) {
+                    Button {
+                        app.play(first, queue: PlayQueue(title: playlistTitle, items: videos, index: 0))
+                    } label: {
+                        Label("Play All", systemImage: "play.fill").frame(maxWidth: .infinity).padding(.vertical, 4)
+                    }
+                    .buttonStyle(.glassProminent)
+                    Button {
+                        let shuffled = videos.shuffled()
+                        app.play(shuffled[0], queue: PlayQueue(title: playlistTitle, items: shuffled, index: 0))
+                    } label: {
+                        Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity).padding(.vertical, 4)
+                    }
+                    .buttonStyle(.glass)
+                }
+                .font(.headline)
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
     }
 
     private var playlistTitle: String {

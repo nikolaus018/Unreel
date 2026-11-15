@@ -96,6 +96,16 @@ struct Comment: Identifiable, Hashable {
     var replies: Int
     var isPinned: Bool
     var isOwner: Bool
+    var repliesToken: String?
+}
+
+/// Videos played in order (a playlist or Watch Later), instead of YouTube's recommendations.
+struct PlayQueue: Equatable {
+    var title: String
+    var items: [VideoItem]
+    var index: Int
+    var current: VideoItem? { items.indices.contains(index) ? items[index] : nil }
+    var hasNext: Bool { index + 1 < items.count }
 }
 
 struct ChannelPage {

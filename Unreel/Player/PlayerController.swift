@@ -282,7 +282,11 @@ final class PlayerController: NSObject, ObservableObject {
         js("seekTo(\(max(0, t)))")
     }
     func seek(by delta: Double) { seek(to: min(max(0, state.time + delta), max(state.duration - 1, 0))) }
-    func setRate(_ r: Double) { state.rate = r; js("setRate(\(r))") }
+    func setRate(_ r: Double) {
+        state.rate = r
+        log.notice("rate -> \(r)")
+        js("setRate(\(r))")
+    }
     func setQuality(_ q: String) { js("setQuality('\(q)')") }
     func togglePiP() {
         let script = """

@@ -23,6 +23,8 @@ final class FeedModel: ObservableObject {
 
     private(set) var source: Source
     private var continuation: String?
+    /// Some pages are only filled for the desktop client; remembered per model once detected.
+    private var client: InnerTube.Client = .mweb
     private let hideShorts: () -> Bool
     private let filter: ((FeedItem) -> Bool)?
     /// Raw response of the first page, for screens that read more than the items (headers).
@@ -46,6 +48,7 @@ final class FeedModel: ObservableObject {
         source = s
         items = []
         continuation = nil
+        client = .mweb
         loadedOnce = false
     }
 
@@ -58,13 +61,28 @@ final class FeedModel: ObservableObject {
         error = nil
         defer { isLoading = false; loadedOnce = true }
         do {
-            let json: J
+            var json: J
+            var page: FeedPage
             switch source {
-            case .browse(let id, let params): json = try await InnerTube.shared.browse(id, params: params)
-            case .search(let q): json = try await InnerTube.shared.search(q)
+            case .browse(let id, let params):
+                do {
+                    json = try await InnerTube.shared.browse(id, params: params, client: client)
+                    page = Parser.feed(json, hideShorts: hideShorts())
+                } catch {
+                    guard client == .mweb else { throw error }
+                    json = J(nil); page = FeedPage()
+                }
+                if page.items.isEmpty && client == .mweb {
+                    if let web = try? await InnerTube.shared.browse(id, params: params, client: .web) {
+                        let webPage = Parser.feed(web, hideShorts: hideShorts())
+                        if !webPage.items.isEmpty { json = web; page = webPage; client = .web }
+                    }
+                }
+            case .search(let q):
+                json = try await InnerTube.shared.search(q)
+                page = Parser.feed(json, hideShorts: hideShorts())
             }
             firstPage = json
-            let page = Parser.feed(json, hideShorts: hideShorts())
             items = apply(page.items)
             continuation = page.continuation
         } catch is CancellationError {
@@ -78,7 +96,7 @@ final class FeedModel: ObservableObject {
         guard let token = continuation, !isLoadingMore, !isLoading else { return }
         isLoadingMore = true
         defer { isLoadingMore = false }
-        guard let json = try? await InnerTube.shared.continuation(source.endpoint, token: token) else { return }
+        guard let json = try? await InnerTube.shared.continuation(source.endpoint, token: token, client: client) else { return }
         let page = Parser.feed(json, hideShorts: hideShorts())
         let existing = Set(items.map(\.id))
         items += apply(page.items).filter { !existing.contains($0.id) }

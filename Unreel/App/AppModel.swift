@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published var searchPath: [Route] = []
 
     @Published var showPlayer = false
+    @Published private(set) var queue: PlayQueue?
     @Published private(set) var watch: WatchDetails?
     @Published private(set) var watchError: String?
     @Published private(set) var account: Account?
@@ -45,7 +46,7 @@ final class AppModel: ObservableObject {
         self.settings = settings
         self.filters = filters
         self.player = PlayerController(settings: settings, filters: filters)
-        player.onEnded = { [weak self] in self?.playNext() }
+        player.onEnded = { [weak self] in self?.playNext(automatic: true) }
         player.onPiPUnavailable = { [weak self] in
             self?.show(Toast(icon: "pip", text: "Picture in Picture isn't available here"))
         }
@@ -69,10 +70,25 @@ final class AppModel: ObservableObject {
 
     // MARK: Playback
 
-    func play(_ video: VideoItem) {
+    /// Plays a video; with a queue, Next and autoplay follow the queue instead of recommendations.
+    func play(_ video: VideoItem, queue: PlayQueue? = nil) {
         haptic()
-        player.play(video)
+        self.queue = queue
+        start(video)
         showPlayer = true
+    }
+
+    /// Plays the queue's item at `index` without opening the player.
+    func jump(to index: Int) {
+        guard var q = queue, q.items.indices.contains(index) else { return }
+        haptic()
+        q.index = index
+        queue = q
+        start(q.items[index])
+    }
+
+    private func start(_ video: VideoItem) {
+        player.play(video)
         loadWatch(video)
     }
 
@@ -111,11 +127,21 @@ final class AppModel: ObservableObject {
         watch?.relatedContinuation = page.continuation
     }
 
-    func playNext() {
-        guard settings.autoplayNext, let next = watch?.related.first(where: { !$0.isLive }) else { return }
-        player.play(next)
-        loadWatch(next)
+    /// `automatic` is true when a video ended on its own (respects the Autoplay setting).
+    func playNext(automatic: Bool = false) {
+        if var q = queue, q.hasNext {
+            q.index += 1
+            queue = q
+            start(q.items[q.index])
+            return
+        }
+        if automatic && !settings.autoplayNext { return }
+        guard let next = watch?.related.first(where: { !$0.isLive }) else { return }
+        queue = nil
+        start(next)
     }
+
+    var canPlayNext: Bool { (queue?.hasNext ?? false) || !(watch?.related.isEmpty ?? true) }
 
     // MARK: Signed-in actions (optimistic: update the UI first, roll back on failure)
 
@@ -185,6 +211,7 @@ final class AppModel: ObservableObject {
         player.stop()
         showPlayer = false
         watch = nil
+        queue = nil
     }
 
     // MARK: Navigation

@@ -1,5 +1,19 @@
 import SwiftUI
 
+// MARK: - Play action
+
+/// Lets a screen decide what tapping a video does (a playlist plays it as part of a queue).
+private struct PlayActionKey: EnvironmentKey {
+    static let defaultValue: ((VideoItem) -> Void)? = nil
+}
+
+extension EnvironmentValues {
+    var playAction: ((VideoItem) -> Void)? {
+        get { self[PlayActionKey.self] }
+        set { self[PlayActionKey.self] = newValue }
+    }
+}
+
 // MARK: - Images
 
 struct RemoteImage: View {
@@ -75,6 +89,7 @@ struct Avatar: View {
 
 struct VideoCard: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.playAction) private var playAction
     let video: VideoItem
 
     var body: some View {
@@ -100,13 +115,14 @@ struct VideoCard: View {
             .padding(.horizontal, 4)
         }
         .contentShape(Rectangle())
-        .onTapGesture { app.play(video) }
+        .onTapGesture { if let playAction { playAction(video) } else { app.play(video) } }
         .videoContextMenu(video)
     }
 }
 
 struct VideoRow: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.playAction) private var playAction
     let video: VideoItem
 
     var body: some View {
@@ -124,7 +140,7 @@ struct VideoRow: View {
             Spacer(minLength: 0)
         }
         .contentShape(Rectangle())
-        .onTapGesture { app.play(video) }
+        .onTapGesture { if let playAction { playAction(video) } else { app.play(video) } }
         .videoContextMenu(video)
     }
 }

@@ -109,6 +109,7 @@ struct WatchView: View {
                     Color.clear.frame(height: 0).id("top")
                     if let w = app.watch {
                         info(w)
+                        if let q = app.queue { queueSection(q) }
                         if !settings.hideRelated, !w.related.isEmpty { upNext(w) }
                     } else if let error = app.watchError {
                         ContentUnavailableView("Couldn't Load Details", systemImage: "exclamationmark.triangle", description: Text(error))
@@ -222,6 +223,52 @@ struct WatchView: View {
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .buttonStyle(.plain)
+    }
+
+    /// The playlist being played, with the current video marked.
+    private func queueSection(_ q: PlayQueue) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(q.title).font(.headline).lineLimit(1)
+                    Text("\(q.index + 1) of \(q.items.count)").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: "list.bullet").foregroundStyle(.secondary)
+            }
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(spacing: 12) {
+                        ForEach(Array(q.items.enumerated()), id: \.offset) { index, v in
+                            Button { app.jump(to: index) } label: {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    Thumbnail(video: v, cornerRadius: 10, small: true)
+                                        .overlay {
+                                            if index == q.index {
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .strokeBorder(Color.accentColor, lineWidth: 3)
+                                                Image(systemName: "waveform").font(.title2.weight(.bold)).foregroundStyle(.white).shadow(radius: 4)
+                                            }
+                                        }
+                                    Text(v.title).font(.caption.weight(.semibold)).lineLimit(2).multilineTextAlignment(.leading)
+                                }
+                                .frame(width: 150)
+                            }
+                            .buttonStyle(.plain)
+                            .id(index)
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                }
+                .padding(.horizontal, -16)
+                .onAppear { proxy.scrollTo(q.index, anchor: .center) }
+                .onChange(of: q.index) { _, i in withAnimation { proxy.scrollTo(i, anchor: .center) } }
+            }
+        }
+        .padding(14)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.horizontal, 16)
+        .padding(.top, 18)
     }
 
     private func upNext(_ w: WatchDetails) -> some View {
@@ -338,56 +385,47 @@ func linkified(_ text: String, links: [TextLink] = []) -> AttributedString {
 
 // MARK: - Comments
 
-struct CommentsView: View {
-    let token: String
-    let count: String?
-    @State private var comments: [Comment] = []
-    @State private var next: String?
-    @State private var loading = false
-    @State private var error: String?
+struct CommentCell: View {
+    let comment: Comment
 
     var body: some View {
-        NavigationStack {
-            List {
-                ForEach(comments) { c in
-                    HStack(alignment: .top, spacing: 12) {
-                        Avatar(url: c.avatar, size: 34)
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack(spacing: 6) {
-                                Text(c.author).font(.caption.weight(.semibold))
-                                    .padding(.horizontal, c.isOwner ? 6 : 0).padding(.vertical, c.isOwner ? 1 : 0)
-                                    .background(c.isOwner ? Color.secondary.opacity(0.2) : .clear, in: Capsule())
-                                if let p = c.published { Text(p).font(.caption).foregroundStyle(.secondary) }
-                                if c.isPinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
-                            }
-                            Text(linkified(c.text)).font(.subheadline).textSelection(.enabled)
-                            HStack(spacing: 14) {
-                                if let l = c.likes, !l.isEmpty { Label(l, systemImage: "hand.thumbsup") }
-                                if c.replies > 0 { Label("\(c.replies) replies", systemImage: "bubble.left") }
-                            }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        }
-                    }
-                    .padding(.vertical, 4)
-                    .onAppear { if c.id == comments.last?.id { Task { await load() } } }
+        HStack(alignment: .top, spacing: 12) {
+            Avatar(url: comment.avatar, size: 34)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(comment.author).font(.caption.weight(.semibold))
+                        .padding(.horizontal, comment.isOwner ? 6 : 0).padding(.vertical, comment.isOwner ? 1 : 0)
+                        .background(comment.isOwner ? Color.secondary.opacity(0.2) : .clear, in: Capsule())
+                    if let p = comment.published { Text(p).font(.caption).foregroundStyle(.secondary) }
+                    if comment.isPinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
                 }
-                if loading { HStack { Spacer(); ProgressView(); Spacer() }.listRowSeparator(.hidden) }
-                if let error, comments.isEmpty {
-                    ContentUnavailableView("Couldn't Load Comments", systemImage: "bubble.left", description: Text(error))
+                Text(linkified(comment.text)).font(.subheadline).textSelection(.enabled)
+                if let l = comment.likes, !l.isEmpty {
+                    Label(l, systemImage: "hand.thumbsup").font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .listStyle(.plain)
-            .navigationTitle(count.map { "Comments · \($0)" } ?? "Comments")
-            .navigationBarTitleDisplayMode(.inline)
-            .task { await load() }
         }
+        .padding(.vertical, 4)
     }
+}
 
-    private func load() async {
+/// Pages through comments (or replies) starting from a continuation token.
+@MainActor
+final class CommentsModel: ObservableObject {
+    @Published private(set) var comments: [Comment] = []
+    @Published private(set) var loading = false
+    @Published private(set) var error: String?
+    private var next: String?
+    private var started = false
+    private let token: String
+
+    init(token: String) { self.token = token }
+
+    func load() async {
         guard !loading else { return }
-        let t = comments.isEmpty ? token : next
+        let t = started ? next : token
         guard let t else { return }
+        started = true
         loading = true
         defer { loading = false }
         do {
@@ -399,5 +437,78 @@ struct CommentsView: View {
         } catch {
             self.error = error.localizedDescription
         }
+    }
+}
+
+struct CommentsView: View {
+    let token: String
+    let count: String?
+    @StateObject private var model: CommentsModel
+
+    init(token: String, count: String?) {
+        self.token = token
+        self.count = count
+        _model = StateObject(wrappedValue: CommentsModel(token: token))
+    }
+
+    var body: some View {
+        NavigationStack {
+            CommentList(model: model)
+                .navigationTitle(count.map { "Comments · \($0)" } ?? "Comments")
+                .navigationBarTitleDisplayMode(.inline)
+                .navigationDestination(for: Comment.self) { parent in
+                    RepliesView(parent: parent)
+                }
+        }
+    }
+}
+
+private struct CommentList: View {
+    @ObservedObject var model: CommentsModel
+    var header: Comment?
+
+    var body: some View {
+        List {
+            if let header {
+                CommentCell(comment: header)
+                    .listRowBackground(Color.secondary.opacity(0.08))
+            }
+            ForEach(model.comments) { c in
+                VStack(alignment: .leading, spacing: 6) {
+                    CommentCell(comment: c)
+                    if c.replies > 0 || c.repliesToken != nil, c.repliesToken != nil, header == nil {
+                        NavigationLink(value: c) {
+                            Text(c.replies > 0 ? "\(c.replies) replies" : "View replies")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .padding(.leading, 46)
+                    }
+                }
+                .onAppear { if c.id == model.comments.last?.id { Task { await model.load() } } }
+            }
+            if model.loading { HStack { Spacer(); ProgressView(); Spacer() }.listRowSeparator(.hidden) }
+            if let error = model.error, model.comments.isEmpty {
+                ContentUnavailableView("Couldn't Load Comments", systemImage: "bubble.left", description: Text(error))
+            }
+        }
+        .listStyle(.plain)
+        .task { if model.comments.isEmpty { await model.load() } }
+    }
+}
+
+private struct RepliesView: View {
+    let parent: Comment
+    @StateObject private var model: CommentsModel
+
+    init(parent: Comment) {
+        self.parent = parent
+        _model = StateObject(wrappedValue: CommentsModel(token: parent.repliesToken ?? ""))
+    }
+
+    var body: some View {
+        CommentList(model: model, header: parent)
+            .navigationTitle("Replies")
+            .navigationBarTitleDisplayMode(.inline)
     }
 }

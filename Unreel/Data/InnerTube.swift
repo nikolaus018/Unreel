@@ -41,14 +41,14 @@ actor InnerTube {
 
     // MARK: Endpoints
 
-    func browse(_ browseId: String, params: String? = nil) async throws -> J {
+    func browse(_ browseId: String, params: String? = nil, client: Client = .mweb) async throws -> J {
         var body: [String: Any] = ["browseId": browseId]
         if let params { body["params"] = params }
-        return try await post("browse", body)
+        return try await post("browse", body, client: client)
     }
 
-    func continuation(_ endpoint: String, token: String) async throws -> J {
-        try await post(endpoint, ["continuation": token])
+    func continuation(_ endpoint: String, token: String, client: Client = .mweb) async throws -> J {
+        try await post(endpoint, ["continuation": token], client: client)
     }
 
     func search(_ query: String, params: String? = nil) async throws -> J {
