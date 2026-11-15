@@ -2,7 +2,7 @@ import SwiftUI
 
 struct FilterListsView: View {
     @EnvironmentObject private var filters: FilterListManager
-    @EnvironmentObject private var web: WebViewModel
+    @EnvironmentObject private var app: AppModel
     @State private var confirmReset = false
 
     var body: some View {
@@ -28,8 +28,8 @@ struct FilterListsView: View {
                 Button {
                     Task {
                         await filters.updateAll()
-                        if let message = filters.lastMessage { web.show(Toast(icon: "checkmark.shield.fill", text: message)) }
-                        web.applyPendingReload()
+                        if let message = filters.lastMessage { app.show(Toast(icon: "checkmark.shield.fill", text: message)) }
+                        app.player.applyPendingReload()
                     }
                 } label: {
                     Label("Update Now", systemImage: "arrow.triangle.2.circlepath")
@@ -137,7 +137,7 @@ struct FilterListsView: View {
 
 struct CustomFiltersView: View {
     @EnvironmentObject private var filters: FilterListManager
-    @EnvironmentObject private var web: WebViewModel
+    @EnvironmentObject private var app: AppModel
     @State private var text = ""
     @FocusState private var focused: Bool
 
@@ -175,8 +175,8 @@ struct CustomFiltersView: View {
                     filters.customFilters = text
                     Task {
                         await filters.applyCustomFilters()
-                        web.applyPendingReload()
-                        web.show(Toast(icon: "checkmark.circle.fill", text: "Filters applied"))
+                        app.player.applyPendingReload()
+                        app.show(Toast(icon: "checkmark.circle.fill", text: "Filters applied"))
                     }
                 }
                 .disabled(text == filters.customFilters || filters.phase.isBusy)

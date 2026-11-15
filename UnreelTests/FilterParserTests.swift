@@ -108,7 +108,7 @@ final class FilterParserTests: XCTestCase {
         var result = ParseResult()
         var parsedLists = 0
         for list in FilterCatalog.lists where list.defaultEnabled {
-            guard let url = Bundle(for: WebViewModel.self).url(forResource: list.id, withExtension: "txt"),
+            guard let url = Bundle(for: PlayerController.self).url(forResource: list.id, withExtension: "txt"),
                   let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
             FilterParser.parse(text, trusted: list.trusted, into: &result)
             parsedLists += 1

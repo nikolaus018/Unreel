@@ -727,6 +727,17 @@
     nativeTabBar: ['ytm-pivot-bar-renderer'],
   };
 
+  // Player mode: the page shows nothing but the video; the native app draws every control.
+  const PLAYER_ONLY_CSS = `
+    html,body{background:#000!important;overflow:hidden!important;overscroll-behavior:none!important}
+    #movie_player,.html5-video-player{position:fixed!important;inset:0!important;width:100vw!important;height:100vh!important;max-height:none!important;z-index:2147483646!important;background:#000!important;transform:none!important;margin:0!important;border-radius:0!important}
+    #movie_player .html5-video-container{position:absolute!important;inset:0!important;width:100%!important;height:100%!important}
+    #movie_player video{position:absolute!important;left:0!important;top:0!important;width:100%!important;height:100%!important;object-fit:contain!important}
+    #movie_player > :not(.html5-video-container):not(.ytp-caption-window-container){display:none!important}
+    #movie_player .ytp-caption-window-container{z-index:3!important}
+    ytm-mobile-topbar-renderer,header,ytm-pivot-bar-renderer,ytm-consent-bump-v2-renderer,ytm-mealbar-promo-renderer,.ytp-unmute,#player-control-overlay,.player-controls-background,ytm-custom-control,.ytm-autonav-bar,ytm-engagement-panel{display:none!important}
+  `;
+
   const STATIC_CSS = `
     [data-unreel-hide]${HIDE}
     .html5-video-player.ad-showing .html5-video-container, .html5-video-player.ad-interrupting .html5-video-container{opacity:0!important}
@@ -807,6 +818,7 @@
       if (CFG[key]) css += CSS_OPTIONAL[key].filter(validSelector).join(',\n') + HIDE + '\n';
     }
     if (CFG.nativeTabBar) css += 'ytm-app{padding-bottom:0!important}.pivot-bar-visible{--ytm-pivot-bar-height:0px!important}\n';
+    if (CFG.playerMode) css += PLAYER_ONLY_CSS;
     styleEl.textContent = css;
   };
   buildCSS();
@@ -900,6 +912,7 @@
   let lastSkip = null;
   let wasPlayingBeforeBackground = false;
   let lastMediaPost = 0;
+  let userMuted = false;
 
   const currentVideoId = () => {
     try { const d = player && player.getVideoData && player.getVideoData(); if (d && d.video_id) return d.video_id; } catch (_) {}
@@ -946,7 +959,7 @@
         player.setPlaybackQuality && player.setPlaybackQuality(pick);
       } catch (_) {}
     }
-    if (CFG.autoplay === false) disableAutoplay();
+    if (CFG.autoplay === false || CFG.playerMode) disableAutoplay();
   };
 
   const disableAutoplay = () => {
@@ -989,12 +1002,26 @@
     return { title, author };
   };
 
+  let waiting = false;
+  const bufferedEnd = () => {
+    try { const b = video.buffered; for (let i = 0; i < b.length; i++) if (b.start(i) <= video.currentTime + 0.5 && b.end(i) >= video.currentTime) return b.end(i); } catch (_) {}
+    return 0;
+  };
+  const qualityInfo = () => {
+    try {
+      return {
+        levels: (player && player.getAvailableQualityLevels && player.getAvailableQualityLevels()) || [],
+        quality: (player && player.getPlaybackQuality && player.getPlaybackQuality()) || '',
+      };
+    } catch (_) { return { levels: [], quality: '' }; }
+  };
   const postMedia = (force) => {
     if (!video) return;
     const now = Date.now();
-    if (!force && now - lastMediaPost < 4000) return;
+    if (!force && now - lastMediaPost < (CFG.playerMode ? 250 : 4000)) return;
     lastMediaPost = now;
     const info = videoInfo();
+    const q = CFG.playerMode ? qualityInfo() : { levels: [], quality: '' };
     post({
       type: 'media',
       playing: !video.paused && !video.ended,
@@ -1004,9 +1031,25 @@
       author: info.author,
       duration: isFinite(video.duration) ? video.duration : 0,
       time: video.currentTime || 0,
+      buffered: bufferedEnd(),
       rate: adState ? 1 : video.playbackRate,
+      waiting,
+      ended: video.ended,
+      muted: video.muted,
+      levels: q.levels,
+      quality: q.quality,
       pip: video.webkitPresentationMode === 'picture-in-picture',
     });
+  };
+
+  /** Fixed positioning only escapes ancestors without transforms or containment. */
+  const liftPlayer = () => {
+    if (!CFG.playerMode || !player) return;
+    for (let el = player.parentElement; el && el !== document.documentElement; el = el.parentElement) {
+      for (const [k, v] of [['transform', 'none'], ['contain', 'none'], ['filter', 'none'], ['will-change', 'auto']]) {
+        if (el.style.getPropertyValue(k) !== v) el.style.setProperty(k, v, 'important');
+      }
+    }
   };
 
   const attachVideo = (v) => {
@@ -1015,9 +1058,27 @@
     v.__unreel = true;
     v.setAttribute('playsinline', '');
     v.setAttribute('x-webkit-airplay', 'allow');
+    if (CFG.playerMode) {
+      // YouTube marks its video as not allowed in PiP; the app handles PiP itself.
+      const allowPiP = () => { if (v.hasAttribute('disablepictureinpicture')) v.removeAttribute('disablepictureinpicture'); v.disablePictureInPicture = false; };
+      allowPiP();
+      new MutationObserver(allowPiP).observe(v, { attributes: true, attributeFilter: ['disablepictureinpicture'] });
+    }
     v.addEventListener('timeupdate', () => { handleAd(); checkSegments(); postMedia(false); });
-    v.addEventListener('playing', () => { applyPrefs(); postMedia(true); });
-    for (const ev of ['play', 'pause', 'ended', 'ratechange', 'durationchange', 'loadedmetadata', 'webkitpresentationmodechanged']) {
+    v.addEventListener('playing', () => {
+      waiting = false;
+      applyPrefs();
+      // YouTube starts muted when it thinks autoplay needs it; the app always allows sound.
+      if (CFG.playerMode && v.muted && !adState && !userMuted) {
+        try { player && player.unMute && player.unMute(); } catch (_) {}
+        v.muted = false;
+      }
+      postMedia(true);
+    });
+    v.addEventListener('waiting', () => { waiting = true; postMedia(true); });
+    v.addEventListener('canplay', () => { waiting = false; postMedia(true); });
+    v.addEventListener('ended', () => { if (!adState) post({ type: 'ended', videoId }); });
+    for (const ev of ['play', 'pause', 'ended', 'ratechange', 'durationchange', 'loadedmetadata', 'seeked', 'webkitpresentationmodechanged']) {
       v.addEventListener(ev, () => postMedia(true));
     }
   };
@@ -1030,6 +1091,7 @@
     }
     const v = (p && p.querySelector('video')) || document.querySelector('video');
     if (v !== video) attachVideo(v);
+    liftPlayer();
     handleAd();
     const id = currentVideoId();
     if (id !== videoId) {
@@ -1055,6 +1117,38 @@
 
   window.__unreel = {
     version: 1,
+    loadVideo(id, start) {
+      start = Number(start) || 0;
+      if (player && player.loadVideoById && location.pathname === '/watch') {
+        try { player.loadVideoById({ videoId: id, startSeconds: start }); return 'player'; } catch (_) {}
+      }
+      location.href = '/watch?v=' + encodeURIComponent(id) + (start ? '&t=' + Math.floor(start) + 's' : '');
+      return 'navigate';
+    },
+    setRate(r) {
+      r = Number(r) || 1;
+      try { player && player.setPlaybackRate && player.setPlaybackRate(r); } catch (_) {}
+      if (video) video.playbackRate = r;
+    },
+    setQuality(q) {
+      try {
+        player.setPlaybackQualityRange && player.setPlaybackQualityRange(q, q);
+        player.setPlaybackQuality && player.setPlaybackQuality(q);
+      } catch (_) {}
+      postMedia(true);
+    },
+    setMuted(m) {
+      userMuted = !!m;
+      if (video) video.muted = !!m;
+      try { m ? player.mute() : player.unMute(); } catch (_) {}
+    },
+    toggleCaptions() {
+      try {
+        if (player && player.toggleSubtitles) { player.toggleSubtitles(); return true; }
+        if (player && player.toggleSubtitlesOn) { player.toggleSubtitlesOn(); return true; }
+      } catch (_) {}
+      return false;
+    },
     applyConfig(next) {
       const prev = CFG;
       CFG = Object.assign({}, CFG, next);
@@ -1087,6 +1181,9 @@
       const v = video || document.querySelector('video');
       if (!v) return 'no-video';
       try {
+        v.removeAttribute('disablepictureinpicture');
+        v.disablePictureInPicture = false;
+        v.setAttribute('autopictureinpicture', '');
         if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {
           const next = v.webkitPresentationMode === 'picture-in-picture' ? 'inline' : 'picture-in-picture';
           v.webkitSetPresentationMode(next);

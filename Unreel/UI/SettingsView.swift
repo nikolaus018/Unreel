@@ -1,13 +1,9 @@
 import SwiftUI
 
 struct SettingsView: View {
-    /// Shown as a tab rather than a sheet: no Done button, large title.
-    var embedded = false
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var filters: FilterListManager
-    @EnvironmentObject private var web: WebViewModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var confirmSignOut = false
+    @EnvironmentObject private var app: AppModel
     @State private var confirmReset = false
 
     var body: some View {
@@ -30,16 +26,17 @@ struct SettingsView: View {
                 } header: {
                     Text("Ad blocking")
                 } footer: {
-                    Text("Ads are removed from YouTube's data before the player sees them. Filter lists from uBlock Origin and EasyList add network blocking and YouTube-specific fixes, and update automatically.")
+                    Text("Ads are removed from YouTube's data before the player sees them, and filter lists from uBlock Origin and EasyList block ad and tracking requests. Lists update automatically.")
                 }
 
-                Section("Shorts") {
+                Section {
                     Toggle(isOn: $settings.hideShorts) {
                         SettingLabel("Hide Shorts", icon: "rectangle.slash", color: .pink)
                     }
-                    Toggle(isOn: $settings.redirectShorts) {
-                        SettingLabel("Open Shorts as regular videos", icon: "rectangle.landscape.rotate", color: .purple)
-                    }
+                } header: {
+                    Text("Shorts")
+                } footer: {
+                    Text("Shorts are left out of every feed, search and channel. Links to Shorts still open, in the regular player.")
                 }
 
                 Section {
@@ -92,20 +89,12 @@ struct SettingsView: View {
                     }
                 }
 
-                Section {
-                    Toggle(isOn: $settings.hideEndscreen) { SettingLabel("Hide end screen cards", icon: "rectangle.grid.2x2", color: .brown) }
-                    Toggle(isOn: $settings.hidePromos) { SettingLabel("Hide Premium promos", icon: "megaphone", color: .orange) }
-                    Toggle(isOn: $settings.hideMerch) { SettingLabel("Hide merch and tickets", icon: "bag", color: .green) }
-                    Toggle(isOn: $settings.hidePlayables) { SettingLabel("Hide Playables", icon: "gamecontroller", color: .purple) }
+                Section("Watch page") {
                     Toggle(isOn: $settings.hideComments) { SettingLabel("Hide comments", icon: "text.bubble", color: .blue) }
-                    Toggle(isOn: $settings.hideRelated) { SettingLabel("Hide related videos", icon: "square.stack", color: .gray) }
-                } header: {
-                    Text("Clean up YouTube")
-                } footer: {
-                    Text("Hiding related videos and comments gives a distraction-free watch page.")
+                    Toggle(isOn: $settings.hideRelated) { SettingLabel("Hide Up Next", icon: "square.stack", color: .gray) }
                 }
 
-                Section("Appearance") {
+                Section("App") {
                     Picker(selection: $settings.theme) {
                         ForEach(AppTheme.allCases) { Text($0.title).tag($0) }
                     } label: {
@@ -114,58 +103,24 @@ struct SettingsView: View {
                     Picker(selection: $settings.startPage) {
                         ForEach(StartPage.allCases) { Text($0.title).tag($0) }
                     } label: {
-                        SettingLabel("Start page", icon: "house", color: .red)
+                        SettingLabel("Start tab", icon: "house", color: .red)
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            SettingLabel("Page size", icon: "textformat.size", color: .blue)
-                            Spacer()
-                            Text("\(Int((settings.pageZoom * 100).rounded()))%").foregroundStyle(.secondary).monospacedDigit()
-                        }
-                        Slider(value: $settings.pageZoom, in: 0.75...1.5, step: 0.05) {
-                            Text("Page size")
-                        } minimumValueLabel: {
-                            Image(systemName: "textformat.size.smaller")
-                        } maximumValueLabel: {
-                            Image(systemName: "textformat.size.larger")
-                        }
-                    }
-                    Toggle(isOn: $settings.desktopSite) {
-                        SettingLabel("Desktop site", icon: "desktopcomputer", color: .gray)
-                    }
-                }
-
-                Section("Browsing") {
+                    Toggle(isOn: $settings.haptics) { SettingLabel("Haptic feedback", icon: "waveform", color: .pink) }
                     Button {
                         openCopiedLink()
                     } label: {
                         SettingLabel("Open copied YouTube link", icon: "doc.on.clipboard", color: .red)
                     }
-                    Toggle(isOn: $settings.pullToRefresh) { SettingLabel("Pull to refresh", icon: "arrow.down.circle", color: .teal) }
-                    Toggle(isOn: $settings.swipeNavigation) { SettingLabel("Swipe to go back", icon: "hand.draw", color: .orange) }
-                    Picker(selection: $settings.externalLinks) {
-                        ForEach(ExternalLinkTarget.allCases) { Text($0.title).tag($0) }
-                    } label: {
-                        SettingLabel("Open other links in", icon: "safari", color: .blue)
-                    }
-                    Toggle(isOn: $settings.haptics) { SettingLabel("Haptic feedback", icon: "waveform", color: .pink) }
                 }
 
                 Section {
                     Button {
-                        Task { await web.clearCache() }
+                        Task { await app.clearCache() }
                     } label: {
                         SettingLabel("Clear cache", icon: "trash", color: .gray)
                     }
-                    Button(role: .destructive) {
-                        confirmSignOut = true
-                    } label: {
-                        SettingLabel("Sign out and clear website data", icon: "person.crop.circle.badge.xmark", color: .red)
-                    }
                 } header: {
-                    Text("Privacy and data")
-                } footer: {
-                    Text("Sign in to YouTube from the You tab. Your account data stays in this app's web storage on this device.")
+                    Text("Data")
                 }
 
                 Section("Advanced") {
@@ -196,33 +151,20 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(embedded ? .large : .inline)
-            .toolbar {
-                if !embedded {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { dismiss() }.fontWeight(.semibold)
-                    }
-                }
-            }
-            .confirmationDialog("Sign out of YouTube and delete all website data?", isPresented: $confirmSignOut, titleVisibility: .visible) {
-                Button("Sign Out and Clear", role: .destructive) { Task { await web.clearAllData() } }
-            } message: {
-                Text("Cookies, history kept by the website, and cached files are removed. Your app settings stay.")
-            }
             .confirmationDialog("Reset all settings to their defaults?", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Reset Settings", role: .destructive) { settings.resetPreferences() }
             }
+            .onDisappear { app.player.applyPendingReload() }
         }
     }
 
     private func openCopiedLink() {
         let pasteboard = UIPasteboard.general
         let candidate = pasteboard.url ?? pasteboard.string.flatMap { URL(string: $0.trimmingCharacters(in: .whitespacesAndNewlines)) }
-        if let url = candidate, web.normalizedYouTubeURL(url) != nil {
-            web.open(url)
-            web.show(Toast(icon: "link", text: "Opened in the Home tab"))
+        if let url = candidate, let host = url.host?.lowercased(), host.contains("youtube.com") || host == "youtu.be" {
+            app.open(url: url)
         } else {
-            web.show(Toast(icon: "exclamationmark.circle", text: "No YouTube link on the clipboard"))
+            app.show(Toast(icon: "exclamationmark.circle", text: "No YouTube link on the clipboard"))
         }
     }
 
@@ -347,7 +289,7 @@ struct AcknowledgementsView: View {
             ack("Peter Lowe's list", "Peter Lowe", "https://pgl.yoyo.org/adservers/")
             ack("SponsorBlock", "Ajay Ramachandran and contributors · data under CC BY-NC-SA 4.0", "https://sponsor.ajay.app")
             Section {
-                Text("Unreel is not affiliated with YouTube or Google. It shows the YouTube mobile website and changes how it looks and behaves on your device.")
+                Text("Unreel is not affiliated with YouTube or Google. It reads YouTube's data and plays videos with YouTube's own web player, with ads removed, on your device.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }

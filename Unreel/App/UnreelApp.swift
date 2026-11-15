@@ -4,48 +4,56 @@ import SwiftUI
 struct UnreelApp: App {
     @StateObject private var settings: AppSettings
     @StateObject private var filters: FilterListManager
-    @StateObject private var web: WebViewModel
+    @StateObject private var app: AppModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var started = false
 
     init() {
+        URLCache.shared = URLCache(memoryCapacity: 64 << 20, diskCapacity: 400 << 20)
         let settings = AppSettings()
         let filters = FilterListManager()
         _settings = StateObject(wrappedValue: settings)
         _filters = StateObject(wrappedValue: filters)
-        _web = StateObject(wrappedValue: WebViewModel(settings: settings, filters: filters))
+        _app = StateObject(wrappedValue: AppModel(settings: settings, filters: filters))
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(player: app.player)
                 .environmentObject(settings)
                 .environmentObject(filters)
-                .environmentObject(web)
+                .environmentObject(app)
                 .preferredColorScheme(settings.theme.colorScheme)
-                .tint(.accentColor)
                 .task { await startUp() }
-                .onOpenURL { web.open($0) }
+                .onOpenURL { app.open(url: $0) }
         }
         .onChange(of: scenePhase) { old, phase in
             switch phase {
-            case .inactive where old == .active: web.sceneWillResignActive()
-            case .background: web.sceneDidEnterBackground()
-            case .active:
-                web.sceneDidBecomeActive()
-                Task { await filters.updateIfDue() }
+            case .inactive where old == .active: app.player.sceneWillResignActive()
+            case .background: app.player.sceneDidEnterBackground()
+            case .active: Task { await filters.updateIfDue() }
             default: break
             }
         }
     }
 
-    /// Loads the page as soon as the compiled rules are ready, so the first page is already filtered.
+    /// Runs once: `.task` fires again whenever a full-screen cover is dismissed.
     private func startUp() async {
-        let start = Date()
-        let rulesTask = Task { await filters.start() }
-        while !filters.isReady && Date().timeIntervalSince(start) < 6 {
-            try? await Task.sleep(for: .milliseconds(50))
+        guard !started else { return }
+        started = true
+        app.tab = settings.startPage.tab
+        await InnerTube.installConsentCookie()
+        await app.refreshAccount()
+        await filters.start()
+    }
+}
+
+extension StartPage {
+    var tab: RootTab {
+        switch self {
+        case .home: .home
+        case .subscriptions: .subscriptions
+        case .you: .you
         }
-        web.loadStartPage()
-        await rulesTask.value
     }
 }

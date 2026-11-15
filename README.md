@@ -4,37 +4,34 @@
 
 # Unreel
 
-**YouTube without ads, without Shorts, without sponsor reads — in a native iOS 26 shell.**
+**YouTube without ads, without Shorts, without sponsor reads — as a native iOS 26 app.**
 
 ![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
 
 </div>
 
-Unreel wraps the YouTube mobile website in a native app with a Liquid Glass tab bar, a native
-search field, a now-playing accessory and a full settings screen. It is meant to be sideloaded
-(for example with [AirRefresh](https://github.com/nikolaus018/airRefresh)); it can't go on the App Store.
+Unreel is a native SwiftUI YouTube client for iOS 26: Liquid Glass tab bar, native search with
+suggestions, native feeds, channels, playlists, comments and a native player UI with a mini player.
+YouTube's data comes from its internal API (InnerTube); playback uses YouTube's own web player in a
+hidden-chrome web view, so streams keep working, while every control on screen is native. It is
+meant to be sideloaded (for example with [AirRefresh](https://github.com/nikolaus018/airRefresh)).
 
 ## Features
 
-- **Ad blocking that works on YouTube**, in three layers:
-  1. **Response cleaning** – `adPlacements`, `playerAds`, `adSlots` and promoted feed items are
-     removed from YouTube's API responses and embedded page data *before* the player reads them.
-  2. **Filter lists** – uBlock Origin (filters, quick fixes, privacy, unbreak), EasyList,
-     EasyPrivacy and optionally Peter Lowe's list. Network rules are compiled into WebKit content
-     blockers (≈108k rules); YouTube-specific cosmetic rules and uBlock *scriptlets*
-     (`json-prune`, `set-constant`, `trusted-replace-fetch-response`, …) run in the page.
-     Lists update automatically (daily by default) or on demand; a snapshot ships with the app so
-     blocking works offline on first launch.
-  3. **Player fallback** – if an ad still starts, it is muted, fast-forwarded and skipped.
-- **No Shorts** – shelves, tabs and search results are removed; Shorts links open in the normal player.
-- **SponsorBlock** – skips sponsors, self-promotion and reminders (configurable), with an Undo notice.
-- **Playback** – background audio, Picture in Picture, lock screen controls, default speed and
-  quality, autoplay toggle, keep-screen-on.
-- **Clean-up switches** – end screen cards, Premium promos, merch, Playables, comments, related videos.
-- **Native shell** – system tab bar (Home, Subscriptions, You, Settings, Search), native search with
-  suggestions, mini-player accessory with play/pause, PiP and Share, pull to refresh, swipe back,
-  theme, page size, desktop-site toggle, `unreel://` links.
-- Custom filters in uBlock Origin syntax, and stats for ads blocked and time saved.
+- **No ads.** The native UI never renders ads, and the player's data is stripped of `adPlacements`,
+  `playerAds` and `adSlots` before YouTube's player reads it. Filter lists from uBlock Origin
+  (filters, quick fixes, privacy, unbreak), EasyList and EasyPrivacy are compiled into WebKit content
+  blockers (≈108k rules) and uBlock *scriptlets* run in the player page. Lists update automatically;
+  a snapshot ships with the app. If an ad still starts, it is muted and skipped.
+- **No Shorts** anywhere — feeds, search, channels. Shorts links still open in the regular player.
+- **SponsorBlock** skips sponsors, self-promotion and reminders, with an Undo notice.
+- **Native player**: glass controls, scrubber with buffer, double-tap to seek, speed, quality,
+  captions, landscape full screen, mini player above the tab bar with a zoom transition, autoplay of
+  the next video, background audio, lock screen controls, Picture in Picture.
+- **Native screens**: Home, Subscriptions, You (history, Watch Later, liked videos, playlists,
+  channels), Search, channel pages (videos, live, playlists), playlists, comments.
+- **Google sign-in** in a web sheet; the cookies are shared by the API client and the player.
+- `unreel://` and youtube.com / youtu.be links open in the app.
 
 ## Build
 
@@ -58,14 +55,15 @@ Refresh the bundled filter snapshot with `Scripts/update-bundled-filters.sh`.
 
 | Area | Files |
 | --- | --- |
+| InnerTube client, models, parser, feeds | `Unreel/Data/` |
+| Player (YouTube web player, native controls bridge, Now Playing, SponsorBlock) | `Unreel/Player/` |
 | Filter parsing (uBO/ABP syntax → WebKit rules + page rules) | `Unreel/Blocking/FilterParser.swift` |
 | Downloading, caching, compiling | `Unreel/Blocking/FilterListManager.swift`, `ContentBlockerCompiler.swift` |
-| In-page engine (cleaning, scriptlets, cosmetics, Shorts, player) | `Unreel/Resources/JS/engine.js` |
-| Web view, navigation, media session, SponsorBlock | `Unreel/Web/` |
-| SwiftUI shell and settings | `Unreel/UI/`, `Unreel/Settings/` |
+| In-page engine (ad cleaning, scriptlets, player-only mode) | `Unreel/Resources/JS/engine.js` |
+| SwiftUI screens and settings | `Unreel/UI/`, `Unreel/Settings/` |
 
 Run the tests (`xcodebuild test -scheme Unreel -destination 'platform=iOS Simulator,name=iPhone 17 Pro'`):
-they include parsing the real bundled lists and compiling them with WebKit.
+they parse the bundled filter lists and compile them with WebKit, and parse captured InnerTube responses.
 
 ## Credits
 
