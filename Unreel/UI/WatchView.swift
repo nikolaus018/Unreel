@@ -19,8 +19,9 @@ struct WatchView: View {
                 playerArea(fullscreen: true)
                     .statusBarHidden()
                     .persistentSystemOverlays(.hidden)
-                    // Touches near the screen edges go to the player first (its buttons sit there).
-                    .defersSystemGestures(on: .all)
+                    // Only the bottom edge is deferred, so scrubbing near it doesn't leave the app.
+                    // The top edge stays with iOS: swiping down there opens Notification / Control Center.
+                    .defersSystemGestures(on: .bottom)
             } else {
                 VStack(spacing: 0) {
                     Color.black

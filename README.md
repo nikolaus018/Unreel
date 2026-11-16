@@ -6,7 +6,7 @@
 
 **YouTube without ads, without Shorts, without sponsor reads — as a native iOS 26 app.**
 
-![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.2.0-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
+![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.2.1-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
 
 <img src="docs/screenshots/watch.png" width="230" alt="Watch screen"> <img src="docs/screenshots/search.png" width="230" alt="Search"> <img src="docs/screenshots/comments.png" width="230" alt="Comments"> <img src="docs/screenshots/settings.png" width="230" alt="Settings with the mini player">
 
@@ -49,8 +49,8 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 - Press and hold for 2× speed.
 - Pinch in full screen to zoom the picture to fill the screen, and pinch back to fit.
 - Speed, quality and captions menu.
-- Rotation like the YouTube app: turn the phone to go fullscreen and back. The fullscreen button forces landscape while you hold the phone upright, swipe up on the video for fullscreen and swipe down to leave.
-- Drag the video (or pull the page below it) down to shrink it into the **mini player** above the tab bar (play/pause, next, close). Swipe up on the mini player to open it, or left for the next video.
+- Rotation like the YouTube app: turn the phone to go fullscreen and back. The fullscreen button forces landscape while you hold the phone upright, swipe up on the video for fullscreen and swipe down to leave. Swiping down from the top edge in fullscreen still opens Notification Center and Control Center.
+- Drag the video (or pull the page below it) down to shrink it into the **mini player** above the tab bar (play/pause, next, close). The mini player keeps showing the video as it plays. Swipe up on it to open it, or left for the next video.
 - Lock-screen and headphone Next skips straight to the next video; Previous goes back in a playlist or restarts the video.
 - **Autoplay** with an "Up next in 5" card (Cancel / Play Now). In the background or Picture in Picture it moves on right away.
 - Background audio, lock-screen and Control Center controls with artwork, Picture in Picture.
@@ -74,7 +74,7 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 
 ## Install
 
-1. Download `Unreel-1.2.0.ipa` from the [latest release](../../releases/latest).
+1. Download `Unreel-1.2.1.ipa` from the [latest release](../../releases/latest).
 2. Sign and install it with your sideloading tool (AirRefresh, Sideloadly, AltStore, …).
    There are no app extensions, so one free-account app ID is enough.
 3. Open Unreel, then sign in from **You ▸ Sign In with Google** if you want your feeds.
@@ -93,7 +93,7 @@ Requires iOS 26.1 or later.
 | Pinch | Video (full screen) | Zoom to fill / fit |
 | Swipe down | Video or page below it (portrait) | Shrink into the mini player |
 | Swipe up | Video (portrait) | Full screen |
-| Swipe down | Video (full screen) | Leave full screen |
+| Swipe down | Video (full screen) | Leave full screen. From the top edge it opens Notification Center / Control Center as usual |
 | Swipe up / left | Mini player | Open the player / next video |
 | Turn the phone | Player open | Enter / leave full screen |
 | Drag the scrubber | Controls | Seek, with a tick at each chapter |

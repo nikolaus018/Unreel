@@ -130,38 +130,72 @@ final class PlayerController: NSObject, ObservableObject {
     /// The view the player can rest in while no player screen is visible (keeps playback alive).
     var parkingView: UIView { parking }
 
-    /// Video surfaces currently on screen, newest last. The newest one shows the video.
-    private var surfaces: [UIView] = []
+    /// Where a video surface sits: the watch screen, or the mini player above the tab bar.
+    enum SurfaceRole { case watch, mini }
 
-    /// Registers a surface and moves the video into it.
-    func attach(to container: UIView) {
-        surfaces.removeAll { $0 === container }
-        surfaces.append(container)
-        place(in: container)
+    /// Video surfaces currently in the view hierarchy, newest last.
+    private var surfaces: [(view: UIView, role: SurfaceRole)] = []
+
+    /// Whether the watch screen is (or is about to be) shown. Set as soon as it opens or closes,
+    /// so the video moves before the screen animates away and never leaves the window (which
+    /// makes WebKit pause it for a moment).
+    var watchVisible = false {
+        didSet { if watchVisible != oldValue { placeBest() } }
     }
 
-    /// Unregisters a surface; the video moves to the next visible surface, or back to parking.
+    /// Registers a surface and moves the video to the best one.
+    func attach(to container: UIView, role: SurfaceRole) {
+        surfaces.removeAll { $0.view === container }
+        surfaces.append((container, role))
+        placeBest()
+    }
+
+    /// Unregisters a surface; the video moves to the next best surface, or back to parking.
     func detach(from container: UIView) {
-        surfaces.removeAll { $0 === container }
-        guard webView.superview === container else { return }
-        if let next = surfaces.last { place(in: next) } else { park() }
+        surfaces.removeAll { $0.view === container }
+        if webView.superview === container { placeBest() }
     }
 
-    private func place(in container: UIView) {
+    /// The watch screen when it's open, otherwise the mini player; if the preferred one isn't
+    /// there yet, the video stays on the surface it's on.
+    private func placeBest() {
+        let preferred: SurfaceRole = watchVisible ? .watch : .mini
+        if let target = surfaces.last(where: { $0.role == preferred }) {
+            place(in: target.view, scaled: target.role == .mini)
+        } else if let current = surfaces.first(where: { $0.view === webView.superview }) {
+            place(in: current.view, scaled: current.role == .mini)
+        } else if let any = surfaces.last {
+            place(in: any.view, scaled: any.role == .mini)
+        } else {
+            park()
+        }
+    }
+
+    private func place(in container: UIView, scaled: Bool) {
         guard webView.superview !== container else { return }
         webView.removeFromSuperview()
-        webView.translatesAutoresizingMaskIntoConstraints = false
+        webView.transform = .identity
         container.addSubview(webView)
-        NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: container.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-        ])
+        if scaled {
+            // The mini player shows a scaled-down copy, so the page keeps its size (and quality).
+            webView.translatesAutoresizingMaskIntoConstraints = true
+            container.setNeedsLayout()
+            container.layoutIfNeeded()
+        } else {
+            webView.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                webView.topAnchor.constraint(equalTo: container.topAnchor),
+                webView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+                webView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+                webView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            ])
+        }
     }
 
     private func park() {
+        guard webView.superview !== parking else { return }
         webView.removeFromSuperview()
+        webView.transform = .identity
         webView.translatesAutoresizingMaskIntoConstraints = true
         webView.frame = CGRect(x: 0, y: 0, width: 320, height: 180)
         parking.addSubview(webView)
@@ -356,6 +390,16 @@ final class PlayerController: NSObject, ObservableObject {
         }
     }
 
+    /// Leaves Picture in Picture if it is on (no-op otherwise).
+    func exitPiP() {
+        webView.callAsyncJavaScript("""
+        const v = document.querySelector('#movie_player video') || document.querySelector('video');
+        if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return 'exited'; }
+        if (v && v.webkitPresentationMode === 'picture-in-picture') { v.webkitSetPresentationMode('inline'); return 'inline'; }
+        return 'none';
+        """, arguments: [:], in: nil, in: .page) { _ in }
+    }
+
     // MARK: Captions
 
     /// Reads the video's caption tracks and turns on the preferred language, if there is one.
@@ -446,6 +490,14 @@ final class PlayerController: NSObject, ObservableObject {
     }
 
     private func handleRemote(_ command: NowPlayingController.Command) {
+        if !isActive {
+            switch command {
+            case .pause: remotePausedWhileInactive = true
+            case .toggle: remotePausedWhileInactive = state.playing
+            case .play: remotePausedWhileInactive = false
+            default: break
+            }
+        }
         switch command {
         case .play: resume()
         case .pause: pause()
@@ -460,18 +512,50 @@ final class PlayerController: NSObject, ObservableObject {
     // MARK: Lifecycle
 
     private var wasPlayingBeforeBackground = false
+    /// The user paused from the lock screen / Notification Center while the app wasn't active.
+    private var remotePausedWhileInactive = false
+    private var isActive = true
+    private var enteredBackground = false
+    /// PiP the app started on its own when the scene went inactive.
+    private var autoStartedPiP = false
 
+    /// Inactive also happens for Notification Center, Control Center and the app switcher.
+    /// Automatic PiP has to start now (iOS won't start it once the app is in the background);
+    /// if the app turns out not to leave, `sceneDidBecomeActive` undoes it.
     func sceneWillResignActive() {
+        isActive = false
+        enteredBackground = false
         wasPlayingBeforeBackground = state.playing
-        if state.playing, settings.autoPiP, !state.pip { togglePiP() }
+        remotePausedWhileInactive = false
+        autoStartedPiP = false
+        if state.playing, settings.autoPiP, !state.pip {
+            autoStartedPiP = true
+            togglePiP()
+        }
+    }
+
+    /// Back from Notification Center, Control Center or a peek at the app switcher (the app never
+    /// left the screen): if something paused the video meanwhile (not the user), carry on.
+    func sceneDidBecomeActive() {
+        isActive = true
+        defer { wasPlayingBeforeBackground = false; remotePausedWhileInactive = false; enteredBackground = false; autoStartedPiP = false }
+        guard wasPlayingBeforeBackground, !enteredBackground, current != nil else { return }
+        // Notification / Control Center: back to inline, as if nothing happened.
+        if autoStartedPiP { exitPiP() }
+        guard !remotePausedWhileInactive else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+            guard let self, self.current != nil, !self.state.playing, !self.state.ended else { return }
+            self.resume()
+        }
     }
 
     func sceneDidEnterBackground() {
-        guard settings.backgroundPlay, wasPlayingBeforeBackground else { return }
+        enteredBackground = true
+        guard settings.backgroundPlay, wasPlayingBeforeBackground, !remotePausedWhileInactive else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
         for delay in [0.3, 1.0, 2.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                guard let self, !self.state.playing else { return }
+                guard let self, !self.state.playing, !self.remotePausedWhileInactive else { return }
                 self.resume()
             }
         }

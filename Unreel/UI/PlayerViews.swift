@@ -6,12 +6,14 @@ import WebKit
 /// Shows the player's web view (which renders only the video). Touches go to the native controls.
 struct PlayerSurface: UIViewRepresentable {
     let player: PlayerController
+    var role: PlayerController.SurfaceRole = .watch
 
     func makeUIView(context: Context) -> UIView {
-        let v = UIView()
+        let v = role == .mini ? ScaledVideoHost() : UIView()
         v.backgroundColor = .black
+        v.clipsToBounds = role == .mini
         v.isUserInteractionEnabled = false
-        player.attach(to: v)
+        player.attach(to: v, role: role)
         return v
     }
 
@@ -44,6 +46,23 @@ struct ZoomableSurface: View {
         guard size.width > 0, size.height > 0 else { return 1 }
         let a = CGFloat(state.videoAspect), container = size.width / size.height
         return a > container ? a / container : container / a
+    }
+}
+
+/// Holds the player at a fixed size and scales it down to fill this view (the mini player), so the
+/// page doesn't relayout and YouTube doesn't drop the quality for a tiny player.
+final class ScaledVideoHost: UIView {
+    private let base = CGSize(width: 384, height: 216)
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        for sub in subviews where sub.translatesAutoresizingMaskIntoConstraints {
+            sub.transform = .identity
+            sub.bounds = CGRect(origin: .zero, size: base)
+            let scale = max(bounds.width / base.width, bounds.height / base.height)
+            sub.transform = CGAffineTransform(scaleX: scale, y: scale)
+            sub.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        }
     }
 }
 
@@ -349,7 +368,9 @@ struct PlayerControls: View {
                 if dragAxis == nil {
                     pendingTap?.cancel()
                     // The scrubber's own drag already started (it sets `scrubbing` right away).
-                    if boosting || scrubbing != nil || showOptions || state.unplayable != nil || app.upNext != nil {
+                    // In full screen, a swipe from the top edge belongs to iOS (Notification / Control Center).
+                    let fromTopEdge = fullscreen && g.startLocation.y < 44
+                    if fromTopEdge || boosting || scrubbing != nil || showOptions || state.unplayable != nil || app.upNext != nil {
                         dragAxis = .ignored
                     } else if abs(g.translation.width) > abs(g.translation.height) {
                         dragAxis = state.duration > 0 && !state.isAd ? .horizontal : .ignored
@@ -977,9 +998,14 @@ struct MiniPlayer: View {
         HStack(spacing: 12) {
             if let v = player.current {
                 if placement != .inline {
-                    RemoteImage(url: v.smallThumbnail)
-                        .frame(width: 54, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                    // The video itself keeps playing here; the thumbnail covers it until it starts.
+                    ZStack {
+                        PlayerSurface(player: player, role: .mini)
+                        if !state.hasStarted { RemoteImage(url: v.smallThumbnail) }
+                    }
+                    .frame(width: 60, height: 34)
+                    .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                    .accessibilityHidden(true)
                 }
                 VStack(alignment: .leading, spacing: 0) {
                     Text(app.watch?.title.isEmpty == false ? app.watch!.title : v.title)

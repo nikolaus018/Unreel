@@ -33,7 +33,9 @@ struct UnreelApp: App {
             switch phase {
             case .inactive where old == .active: app.player.sceneWillResignActive()
             case .background: app.player.sceneDidEnterBackground()
-            case .active: Task { await filters.updateIfDue() }
+            case .active:
+                if old != .active { app.player.sceneDidBecomeActive() }
+                Task { await filters.updateIfDue() }
             default: break
             }
         }

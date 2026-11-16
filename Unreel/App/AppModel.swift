@@ -27,7 +27,9 @@ final class AppModel: ObservableObject {
     @Published var youPath: [Route] = []
     @Published var searchPath: [Route] = []
 
-    @Published var showPlayer = false
+    @Published var showPlayer = false {
+        didSet { player.watchVisible = showPlayer }
+    }
     @Published private(set) var queue: PlayQueue?
     /// "Up next in N seconds" card shown when a video ends.
     @Published private(set) var upNext: (video: VideoItem, seconds: Int)?

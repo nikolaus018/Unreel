@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.1 — 2026-11-16
+
+- **Notification Center and Control Center don't interrupt the video.** In full screen, a swipe
+  down from the top edge opens them on the first swipe instead of leaving full screen and rotating
+  the screen (swiping down from the middle of the video still leaves full screen). Opening them no
+  longer stops playback: automatic Picture in Picture is undone when you come straight back, and a
+  video that was paused on the way picks up again — unless you paused it yourself.
+- **The mini player shows the video itself**, still playing, instead of a thumbnail.
+- **No more stutter when minimizing or reopening the player:** the video moves between the player
+  and the mini player without leaving the screen, so it no longer pauses for a moment and restarts.
+
 ## 1.2.0 — 2026-11-16
 
 Player gestures, reworked.
