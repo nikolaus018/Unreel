@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.2.0 — 2026-11-16
+
+Player gestures, reworked.
+
+- **Taps feel immediate and keep seeking.** After a double tap, further taps on the same side keep
+  seeking (10, 20, 30 s…) without needing another double tap, with a YouTube-style arc and
+  running arrows. Double-tap the middle to play or pause.
+- **Swipe across the video to scrub.** A large readout shows the target time, the offset and the
+  chapter; a tick marks each chapter you cross. Dragging the scrubber shows the same readout.
+- **Pinch to zoom** the picture to fill the screen in full screen, and pinch back to fit.
+- **Hold for 2×** shows a clear "2× Speed" badge, and letting go no longer counts as a tap.
+- **Drags work everywhere on the player**, including over the buttons, and a button no longer
+  fires when a drag ends on it. Dragging down shows the app behind the player, gives a haptic
+  when letting go would minimize, and resists upward drags until full screen.
+- **Pull the page below the video down** to minimize, like the video itself.
+- **Mini player:** swipe up to open, swipe left for the next video.
+- **Smoother progress:** the time, scrubber and progress line move continuously between the
+  player's updates.
+
+Fixes
+
+- Seeking before the video's length was known jumped to the start.
+- The position jumped back briefly after a seek.
+- Lock-screen and headphone Next showed the countdown instead of skipping; Previous now goes
+  back in a playlist (or restarts after 3 seconds, like Music).
+- Pinching in full screen could close the player (the zoom transition's own pinch gesture).
+- Switching search filters or channel tabs quickly could show the previous tab's results.
+- Search loaded new queries twice; tapping a suggestion now searches right away.
+- Links to `@handles`, `/c/`, `/user/` and hashtag pages open; links that can't be opened say so.
+
 ## 1.1.0 — 2026-11-16
 
 A design pass against Apple's Human Interface Guidelines.

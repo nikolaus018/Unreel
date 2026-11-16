@@ -28,6 +28,10 @@ final class PlaybackState: ObservableObject {
     @Published var captionTracks: [CaptionTrack] = []
     @Published var captionTrack: CaptionTrack?
     @Published var cues: [CaptionCue] = []
+    /// Width / height of the video picture (for zoom to fill).
+    @Published var videoAspect: Double = 16 / 9
+    /// Full screen: the picture fills the screen (cropped) instead of fitting.
+    @Published var zoomToFill = false
     /// When `time` was last reported, to interpolate between reports.
     var timeStamp = Date()
 
@@ -55,6 +59,11 @@ final class PlayerController: NSObject, ObservableObject {
     @Published private(set) var current: VideoItem?
 
     var onEnded: (() -> Void)?
+    /// Lock screen / headphone "next" and "previous".
+    var onNext: (() -> Void)?
+    var onPrevious: (() -> Void)?
+    /// A seek the page hasn't reported back yet; older time reports are ignored until it lands.
+    private var pendingSeek: (time: Double, at: Date)?
     var onSkippedSegment: ((String, Int) -> Void)?
     var onPiPUnavailable: (() -> Void)?
 
@@ -254,6 +263,8 @@ final class PlayerController: NSObject, ObservableObject {
         state.ended = false
         state.waiting = true
         state.isAd = false
+        state.videoAspect = 16 / 9
+        pendingSeek = nil
         load(video.id, start: start)
         updateNowPlaying()
     }
@@ -304,10 +315,18 @@ final class PlayerController: NSObject, ObservableObject {
     func pause() { js("pause()") }
     func resume() { js("play()") }
     func seek(to t: Double) {
-        state.time = t
-        js("seekTo(\(max(0, t)))")
+        let target = max(0, t)
+        state.time = target
+        state.timeStamp = Date()
+        state.ended = false
+        pendingSeek = (target, Date())
+        js("seekTo(\(target))")
     }
-    func seek(by delta: Double) { seek(to: min(max(0, state.time + delta), max(state.duration - 1, 0))) }
+    /// Relative seek from the interpolated position. Before the duration is known only the lower bound applies.
+    func seek(by delta: Double) {
+        let upper = state.duration > 0 ? max(state.duration - 1, 0) : .infinity
+        seek(to: min(max(0, state.estimatedTime() + delta), upper))
+    }
     func setRate(_ r: Double) {
         state.rate = r
         log.notice("rate -> \(r)")
@@ -433,8 +452,8 @@ final class PlayerController: NSObject, ObservableObject {
         case .toggle: togglePlay()
         case .seekBy(let s): seek(by: s)
         case .seekTo(let t): seek(to: t)
-        case .next: onEnded?()
-        case .previous: seek(to: 0)
+        case .next: onNext?()
+        case .previous: onPrevious?()
         }
     }
 
@@ -469,8 +488,17 @@ final class PlayerController: NSObject, ObservableObject {
             if let id = body["videoId"] as? String, let current, id != current.id { return }
             let s = state
             s.playing = body["playing"] as? Bool ?? false
-            s.time = body["time"] as? Double ?? s.time
-            s.timeStamp = Date()
+            let reported = body["time"] as? Double ?? s.time
+            if let p = pendingSeek, abs(reported - p.time) > 2, Date().timeIntervalSince(p.at) < 1.5 {
+                // A report from before the seek landed: keep showing the target.
+            } else {
+                pendingSeek = nil
+                s.time = reported
+                s.timeStamp = Date()
+            }
+            if let w = body["vw"] as? Double, let h = body["vh"] as? Double, w > 0, h > 0, abs(w / h - s.videoAspect) > 0.01 {
+                s.videoAspect = w / h
+            }
             let d = body["duration"] as? Double ?? 0
             if d > 0 { s.duration = d }
             s.buffered = body["buffered"] as? Double ?? 0

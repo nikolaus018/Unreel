@@ -50,6 +50,8 @@ final class AppModel: ObservableObject {
         self.filters = filters
         self.player = PlayerController(settings: settings, filters: filters)
         player.onEnded = { [weak self] in self?.videoEnded() }
+        player.onNext = { [weak self] in self?.playNext() }
+        player.onPrevious = { [weak self] in self?.playPrevious() }
         player.onPiPUnavailable = { [weak self] in
             self?.show(Toast(icon: "pip", text: "Picture in Picture isn't available here"))
         }
@@ -203,6 +205,15 @@ final class AppModel: ObservableObject {
         show(Toast(icon: "text.line.first.and.arrowtriangle.forward", text: "Plays next"))
     }
 
+    /// Previous in the queue, or back to the start when more than a few seconds in (like Music).
+    func playPrevious() {
+        if player.state.time > 3 || !(queue.map { $0.index > 0 } ?? false) {
+            player.seek(to: 0)
+            return
+        }
+        jump(to: (queue?.index ?? 1) - 1)
+    }
+
     var canPlayNext: Bool { (queue?.hasNext ?? false) || !(watch?.related.isEmpty ?? true) }
 
     // MARK: Signed-in actions (optimistic: update the UI first, roll back on failure)
@@ -318,12 +329,24 @@ final class AppModel: ObservableObject {
         }
         if let list = q("list") { open(.playlist(list, "Playlist")); return }
         if path.hasPrefix("/channel/"), let id = path.split(separator: "/").dropFirst().first { open(.channel(String(id))); return }
-        if path.hasPrefix("/@") {
-            Task {
-                if let json = try? await InnerTube.shared.post("navigation/resolve_url", ["url": "https://www.youtube.com\(path)"]),
-                   let id = json.first("browseEndpoint")["browseId"].string {
+        // Anything else (@handles, /c/, /user/, custom URLs): ask YouTube what it points to.
+        guard !path.isEmpty, path != "/" else { tab = .home; showPlayer = false; return }
+        Task {
+            let json = try? await InnerTube.shared.post("navigation/resolve_url", ["url": "https://www.youtube.com\(path)"])
+            if let id = json?.first("browseEndpoint")["browseId"].string {
+                if id.hasPrefix("VL") {
+                    open(.playlist(String(id.dropFirst(2)), "Playlist"))
+                } else if id.hasPrefix("UC") {
                     open(.channel(id))
+                } else {
+                    // Feed pages such as hashtags.
+                    let title = path.split(separator: "/").last.map { $0.removingPercentEncoding ?? String($0) } ?? "YouTube"
+                    open(.browse(id, title.hasPrefix("@") ? title : title.capitalized))
                 }
+            } else if let v = json?.first("watchEndpoint")["videoId"].string {
+                play(VideoItem(id: v, title: ""))
+            } else {
+                show(Toast(icon: "link.badge.plus", text: "Couldn't open that link"))
             }
         }
     }

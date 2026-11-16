@@ -33,6 +33,11 @@ struct RootView: View {
         .fullScreenCover(isPresented: $app.showPlayer, onDismiss: { player.applyPendingReload() }) {
             WatchView()
                 .navigationTransition(.zoom(sourceID: "player", in: transition))
+                // The player has its own drag-to-minimize; the zoom transition's pinch and swipe
+                // dismissal would fight the video gestures (pinch to fill, swipe to scrub).
+                .interactiveDismissDisabled()
+                // Transparent, so the app shows through while the player is dragged down.
+                .presentationBackground(.clear)
         }
         .sheet(isPresented: $app.showSignIn) {
             SignInView()

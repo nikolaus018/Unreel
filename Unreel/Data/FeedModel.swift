@@ -29,6 +29,9 @@ final class FeedModel: ObservableObject {
     private let filter: ((FeedItem) -> Bool)?
     /// Raw response of the first page, for screens that read more than the items (headers).
     private(set) var firstPage: J?
+    /// Bumped whenever the source changes, so answers for an older source are thrown away.
+    private var generation = 0
+    private var reloadTask: Task<Void, Never>?
 
     init(_ source: Source, hideShorts: @escaping () -> Bool, filter: ((FeedItem) -> Bool)? = nil) {
         self.source = source
@@ -46,6 +49,13 @@ final class FeedModel: ObservableObject {
     func setSource(_ s: Source) {
         guard s != source else { return }
         source = s
+        generation += 1
+        reloadTask?.cancel()
+        reloadTask = nil
+        isLoading = false
+        isLoadingMore = false
+        error = nil
+        firstPage = nil
         items = []
         continuation = nil
         client = .mweb
@@ -58,16 +68,26 @@ final class FeedModel: ObservableObject {
 
     /// Reloads the first page. On failure or cancellation the current items stay on screen.
     func reload() async {
+        // Join a reload that is already running for this source instead of sending a second one.
+        if let running = reloadTask { await running.value; return }
         // Run detached from the caller: SwiftUI cancels `.refreshable` tasks when the view
         // updates, which would otherwise abort the request halfway.
         let task = Task { await performReload() }
+        reloadTask = task
         await task.value
     }
 
     private func performReload() async {
+        let gen = generation
         isLoading = true
         error = nil
-        defer { isLoading = false; loadedOnce = true }
+        defer {
+            if gen == generation {
+                isLoading = false
+                loadedOnce = true
+                reloadTask = nil
+            }
+        }
         do {
             var json: J
             var page: FeedPage
@@ -85,6 +105,7 @@ final class FeedModel: ObservableObject {
                 json = try await InnerTube.shared.search(q, params: params)
                 page = Parser.feed(json, hideShorts: hideShorts())
             }
+            guard gen == generation else { return }
             let newItems = apply(page.items)
             // An empty answer on a refresh is almost always a hiccup: keep what is shown.
             if newItems.isEmpty && !items.isEmpty { return }
@@ -92,6 +113,7 @@ final class FeedModel: ObservableObject {
             items = newItems
             continuation = page.continuation
         } catch {
+            guard gen == generation else { return }
             if error is CancellationError || (error as? URLError)?.code == .cancelled { return }
             if items.isEmpty { self.error = error.localizedDescription }
         }
@@ -99,9 +121,11 @@ final class FeedModel: ObservableObject {
 
     func loadMore() async {
         guard let token = continuation, !isLoadingMore, !isLoading else { return }
+        let gen = generation
         isLoadingMore = true
-        defer { isLoadingMore = false }
-        guard let json = try? await InnerTube.shared.continuation(source.endpoint, token: token, client: client) else { return }
+        defer { if gen == generation { isLoadingMore = false } }
+        guard let json = try? await InnerTube.shared.continuation(source.endpoint, token: token, client: client),
+              gen == generation else { return }
         let page = Parser.feed(json, hideShorts: hideShorts())
         let existing = Set(items.map(\.id))
         items += apply(page.items).filter { !existing.contains($0.id) }

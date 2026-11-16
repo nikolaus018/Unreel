@@ -1084,6 +1084,8 @@
       levels: q.levels,
       quality: q.quality,
       pip: video.webkitPresentationMode === 'picture-in-picture',
+      vw: video.videoWidth || 0,
+      vh: video.videoHeight || 0,
     });
   };
 

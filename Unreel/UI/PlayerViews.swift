@@ -24,6 +24,29 @@ struct PlayerSurface: UIViewRepresentable {
     }
 }
 
+/// The video surface, scaled up to fill the screen when zoomed (full screen only).
+struct ZoomableSurface: View {
+    @ObservedObject var state: PlaybackState
+    let player: PlayerController
+    let fullscreen: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            PlayerSurface(player: player)
+                .scaleEffect(fullscreen && state.zoomToFill ? fillScale(geo.size) : 1)
+                .animation(.spring(duration: 0.35), value: state.zoomToFill)
+        }
+        .clipped()
+    }
+
+    /// How much a fitted picture must grow to cover the whole container.
+    private func fillScale(_ size: CGSize) -> CGFloat {
+        guard size.width > 0, size.height > 0 else { return 1 }
+        let a = CGFloat(state.videoAspect), container = size.width / size.height
+        return a > container ? a / container : container / a
+    }
+}
+
 /// Keeps the web view in the window while no player screen shows it, so audio keeps playing.
 struct ParkingHost: UIViewRepresentable {
     let player: PlayerController
@@ -45,14 +68,35 @@ struct PlayerControls: View {
     let player: PlayerController
     var fullscreen: Bool
     var onCollapse: () -> Void
+    /// Vertical drags on the video, handled by the watch screen (minimize, full screen).
+    var onVerticalDrag: (CGFloat) -> Void = { _ in }
+    var onVerticalDragEnd: (_ translation: CGFloat, _ predicted: CGFloat) -> Void = { _, _ in }
+
+    private enum Zone { case back, center, forward }
+    private enum Axis { case horizontal, vertical, ignored }
 
     @State private var visible = true
     @State private var hideTask: Task<Void, Never>?
     @State private var scrubbing: Double?
-    @State private var seekFeedback: (forward: Bool, id: Int)?
-    @State private var feedbackCounter = 0
-    @State private var seekStack = 0
-    @State private var lastSeekTap: (forward: Bool, at: Date)?
+    /// Where the current scrub started, for the "+0:15" readout.
+    @State private var scrubOrigin: Double = 0
+    @State private var lastScrubChapter: Int?
+    // Taps: a single tap toggles the controls; double taps seek, and further taps on the same
+    // side keep seeking while "seek mode" lasts (like YouTube).
+    @State private var lastTap: (zone: Zone, at: Date)?
+    @State private var pendingTap: Task<Void, Never>?
+    @State private var seekZone: Zone?
+    @State private var seekAmount = 0
+    @State private var seekModeUntil = Date.distantPast
+    @State private var seekFeedbackID = 0
+    @State private var flashIcon: (symbol: String, id: Int)?
+    @State private var dragAxis: Axis?
+    @State private var suppressTap = false
+    @State private var notice: (text: String, icon: String, id: Int)?
+    @State private var width: CGFloat = 1
+    @State private var dragEndedAt = Date.distantPast
+    /// True while a finger is down in a recognized drag; resets itself even if the drag is cancelled.
+    @GestureState private var dragActive = false
     @GestureState private var boosting = false
     @State private var rateBeforeBoost: Double = 1
     @State private var showOptions = false
@@ -73,13 +117,15 @@ struct PlayerControls: View {
 
             // Thin progress line while the controls are hidden (portrait only).
             if !visible && !fullscreen && state.duration > 0 && !state.isAd {
-                VStack {
-                    Spacer()
-                    GeometryReader { geo in
-                        Rectangle().fill(Color.accentColor)
-                            .frame(width: geo.size.width * min(max(state.time / state.duration, 0), 1), height: 2.5)
+                TimelineView(.periodic(from: .now, by: 0.1)) { context in
+                    VStack {
+                        Spacer()
+                        GeometryReader { geo in
+                            Rectangle().fill(Color.accentColor)
+                                .frame(width: geo.size.width * min(max(state.estimatedTime(at: context.date) / state.duration, 0), 1), height: 2.5)
+                        }
+                        .frame(height: 2.5)
                     }
-                    .frame(height: 2.5)
                 }
                 .allowsHitTesting(false)
             }
@@ -89,49 +135,51 @@ struct PlayerControls: View {
                     .allowsHitTesting(false)
             }
 
-            // Gesture layer: tap toggles controls, double tap on either side seeks.
-            HStack(spacing: 0) {
-                gestureZone(forward: false)
-                gestureZone(forward: true)
+            // One surface for every gesture on the video.
+            GeometryReader { geo in
+                Color.clear
+                    .contentShape(Rectangle())
+                    .gesture(SpatialTapGesture().onEnded { handleTap(at: $0.location, width: geo.size.width) })
+                    .simultaneousGesture(boostGesture)
+                    .simultaneousGesture(zoomGesture, including: fullscreen ? .all : .subviews)
             }
-            .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.4)
-                    .sequenced(before: DragGesture(minimumDistance: 0))
-                    .updating($boosting) { value, state, _ in
-                        if case .second(true, _) = value { state = true }
-                    }
-            )
+            .accessibilityHidden(true)
 
-            if boosting {
+            if let zone = seekZone, seekAmount > 0 {
+                SeekRipple(forward: zone == .forward, seconds: seekAmount, reduceMotion: reduceMotion)
+                    .id(seekZone == .forward ? 1 : 0)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+
+            if let flash = flashIcon {
+                Image(systemName: flash.symbol)
+                    .font(.system(.largeTitle, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 76, height: 76)
+                    .background(.black.opacity(0.35), in: Circle())
+                    .id(flash.id)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 1.3).combined(with: .opacity))
+                    .allowsHitTesting(false)
+            }
+
+            if boosting || notice != nil {
                 VStack {
-                    Label("2×", systemImage: "forward.fill")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14).padding(.vertical, 7)
-                        .glassEffect(.regular, in: Capsule())
-                        .padding(.top, 14)
+                    Group {
+                        if boosting {
+                            Label("2× Speed", systemImage: "forward.fill")
+                        } else if let notice {
+                            Label(notice.text, systemImage: notice.icon)
+                        }
+                    }
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .glassEffect(.regular, in: Capsule())
+                    .padding(.top, fullscreen ? 20 : 12)
                     Spacer()
                 }
                 .transition(.opacity.combined(with: .move(edge: .top)))
-                .allowsHitTesting(false)
-            }
-
-            if let fb = seekFeedback {
-                HStack {
-                    if fb.forward { Spacer() }
-                    VStack(spacing: 4) {
-                        Image(systemName: fb.forward ? "forward.fill" : "backward.fill")
-                            .font(.title2.weight(.semibold))
-                        Text("\(seekStack) seconds").font(.caption.weight(.semibold)).monospacedDigit()
-                    }
-                    .foregroundStyle(.white)
-                    .frame(width: 110, height: 110)
-                    .background(.black.opacity(0.35), in: Circle())
-                    .padding(.horizontal, 40)
-                    if !fb.forward { Spacer() }
-                }
-                .transition(.opacity)
-                .id(fb.id)
                 .allowsHitTesting(false)
             }
 
@@ -172,18 +220,42 @@ struct PlayerControls: View {
         .animation(.easeInOut(duration: 0.2), value: visible)
         .animation(.easeOut(duration: 0.3), value: state.hasStarted)
         .animation(.spring(duration: 0.3), value: app.upNext?.video.id)
-        .animation(.easeOut(duration: 0.25), value: seekFeedback?.id)
+        .animation(.easeOut(duration: 0.2), value: seekZone)
+        .animation(.easeOut(duration: 0.25), value: flashIcon?.id)
+        .animation(.easeOut(duration: 0.2), value: notice?.id)
         .animation(.easeOut(duration: 0.15), value: boosting)
+        .animation(.easeOut(duration: 0.15), value: scrubbing == nil)
         .onChange(of: boosting) { _, on in
             if on {
                 rateBeforeBoost = state.rate
                 player.setRate(2)
-                app.haptic()
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                pendingTap?.cancel()
+                suppressTap = true
                 visible = false
             } else {
                 player.setRate(rateBeforeBoost)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { suppressTap = false }
             }
         }
+        .onChange(of: scrubbing == nil) { _, ended in
+            if !ended { scrubOrigin = state.estimatedTime(); hideTask?.cancel() }
+        }
+        .onChange(of: fullscreen) { _, full in if !full { state.zoomToFill = false } }
+        .onChange(of: dragActive) { _, active in
+            // A drag the system cancelled never reaches onEnded: undo what it started.
+            guard !active, let axis = dragAxis else { return }
+            DispatchQueue.main.async {
+                guard dragAxis == axis, !dragActive else { return }
+                if axis == .horizontal { scrubbing = nil; scheduleHide() }
+                if axis == .vertical { onVerticalDragEnd(0, 0) }
+                dragAxis = nil
+                dragEndedAt = Date()
+            }
+        }
+        // On the whole player (not just the empty video), so drags that start on a button still work.
+        .simultaneousGesture(dragGesture(width: width))
+        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background { keyboardShortcuts }
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .onAppear { scheduleHide() }
@@ -196,12 +268,156 @@ struct PlayerControls: View {
         }
     }
 
-    private func gestureZone(forward: Bool) -> some View {
-        Color.clear
-            .contentShape(Rectangle())
-            .onTapGesture(count: 2) { doubleTapSeek(forward: forward) }
-            .onTapGesture { visible.toggle(); if visible { scheduleHide() } }
-            .accessibilityHidden(true)
+    // MARK: Gestures
+
+    /// Buttons ignore a touch that turned into a drag (released back over the button).
+    private func guardTap(_ action: () -> Void) {
+        guard !dragActive, Date().timeIntervalSince(dragEndedAt) > 0.3 else { return }
+        action()
+    }
+
+    private func zone(at x: CGFloat, width: CGFloat) -> Zone {
+        x < width * 0.35 ? .back : (x > width * 0.65 ? .forward : .center)
+    }
+
+    private func handleTap(at location: CGPoint, width: CGFloat) {
+        if suppressTap { suppressTap = false; return }
+        let z = zone(at: location.x, width: width)
+        let now = Date()
+        // Seek mode: every tap on the same side seeks again, no double tap needed.
+        if z != .center, z == seekZone, now < seekModeUntil {
+            seek(z)
+            return
+        }
+        if let last = lastTap, last.zone == z, now.timeIntervalSince(last.at) < 0.3 {
+            pendingTap?.cancel()
+            lastTap = nil
+            if z == .center {
+                if state.ended { player.seek(to: 0); player.resume() } else { player.togglePlay() }
+                flash(state.playing ? "pause.fill" : "play.fill")
+                app.haptic()
+            } else {
+                seek(z)
+            }
+            return
+        }
+        lastTap = (z, now)
+        pendingTap?.cancel()
+        pendingTap = Task {
+            try? await Task.sleep(for: .milliseconds(240))
+            guard !Task.isCancelled else { return }
+            visible.toggle()
+            if visible { scheduleHide() }
+        }
+    }
+
+    private func seek(_ z: Zone) {
+        if seekZone != z || Date() >= seekModeUntil { seekAmount = 0 }
+        seekZone = z
+        seekAmount += 10
+        seekModeUntil = Date().addingTimeInterval(0.8)
+        player.seek(by: z == .forward ? 10 : -10)
+        app.haptic()
+        if visible { scheduleHide() }
+        seekFeedbackID += 1
+        let id = seekFeedbackID
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+            guard seekFeedbackID == id else { return }
+            seekZone = nil
+            seekAmount = 0
+        }
+    }
+
+    private func flash(_ symbol: String) {
+        let id = (flashIcon?.id ?? 0) + 1
+        flashIcon = (symbol, id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { if flashIcon?.id == id { flashIcon = nil } }
+    }
+
+    private func showNotice(_ text: String, icon: String) {
+        let id = (notice?.id ?? 0) + 1
+        notice = (text, icon, id)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { if notice?.id == id { notice = nil } }
+    }
+
+    /// Horizontal: scrub (the whole width covers half the video, between 1 and 15 minutes).
+    /// Vertical: handed to the watch screen.
+    private func dragGesture(width: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 14, coordinateSpace: .global)
+            .updating($dragActive) { _, active, _ in active = true }
+            .onChanged { g in
+                if dragAxis == nil {
+                    pendingTap?.cancel()
+                    // The scrubber's own drag already started (it sets `scrubbing` right away).
+                    if boosting || scrubbing != nil || showOptions || state.unplayable != nil || app.upNext != nil {
+                        dragAxis = .ignored
+                    } else if abs(g.translation.width) > abs(g.translation.height) {
+                        dragAxis = state.duration > 0 && !state.isAd ? .horizontal : .ignored
+                        if dragAxis == .horizontal {
+                            visible = true
+                            scrubOrigin = state.estimatedTime()
+                            lastScrubChapter = state.chapters.lastIndex { $0.start <= scrubOrigin }
+                            scrubbing = scrubOrigin
+                            UISelectionFeedbackGenerator().selectionChanged()
+                        }
+                    } else {
+                        dragAxis = .vertical
+                    }
+                }
+                switch dragAxis {
+                case .horizontal:
+                    let span = min(max(state.duration * 0.5, 60), 900)
+                    let t = min(max(scrubOrigin + Double(g.translation.width / max(width, 1)) * span, 0), state.duration)
+                    scrubbing = t
+                    let chapter = state.chapters.lastIndex { $0.start <= t }
+                    if chapter != lastScrubChapter { lastScrubChapter = chapter; UISelectionFeedbackGenerator().selectionChanged() }
+                case .vertical:
+                    onVerticalDrag(g.translation.height)
+                default:
+                    break
+                }
+            }
+            .onEnded { g in
+                switch dragAxis {
+                case .horizontal:
+                    if let t = scrubbing { player.seek(to: t) }
+                    scrubbing = nil
+                    scheduleHide()
+                case .vertical:
+                    onVerticalDragEnd(g.translation.height, g.predictedEndTranslation.height)
+                default:
+                    break
+                }
+                dragAxis = nil
+                dragEndedAt = Date()
+            }
+    }
+
+    /// Press and hold anywhere for 2× until released.
+    private var boostGesture: some Gesture {
+        LongPressGesture(minimumDuration: 0.4)
+            .sequenced(before: DragGesture(minimumDistance: 0))
+            .updating($boosting) { value, state, _ in
+                if case .second(true, let drag) = value, (drag?.translation).map({ hypot($0.width, $0.height) < 30 }) ?? true {
+                    state = true
+                }
+            }
+    }
+
+    /// Full screen: pinch out to fill the screen, pinch in to fit.
+    private var zoomGesture: some Gesture {
+        MagnifyGesture(minimumScaleDelta: 0.04)
+            .onEnded { value in
+                if value.magnification > 1.08, !state.zoomToFill {
+                    state.zoomToFill = true
+                    app.haptic()
+                    showNotice("Zoomed to Fill", icon: "arrow.up.left.and.arrow.down.right")
+                } else if value.magnification < 0.92, state.zoomToFill {
+                    state.zoomToFill = false
+                    app.haptic()
+                    showNotice("Original", icon: "arrow.down.right.and.arrow.up.left")
+                }
+            }
     }
 
     /// Hardware keyboard: space plays and pauses, arrows seek, F toggles full screen.
@@ -242,15 +458,46 @@ struct PlayerControls: View {
             .padding(.top, fullscreen ? 22 : 8)
             .padding(.bottom, fullscreen ? 14 : 4)
 
-            centerButtons
+            if let t = scrubbing {
+                scrubPreview(t)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            } else {
+                centerButtons
+                    .transition(.opacity)
+            }
         }
         .foregroundStyle(.white)
+    }
+
+    /// Big time readout while scrubbing (from the bar or by swiping across the video).
+    private func scrubPreview(_ t: Double) -> some View {
+        let delta = Int((t - scrubOrigin).rounded())
+        return VStack(spacing: 2) {
+            Text(format(t))
+                .font(.system(fullscreen ? .largeTitle : .title, design: .rounded, weight: .bold).monospacedDigit())
+                .contentTransition(.numericText())
+            Text((delta >= 0 ? "+" : "−") + format(Double(abs(delta))))
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .foregroundStyle(.white.opacity(0.75))
+            if let ch = state.chapter(at: t) {
+                Text(ch.title)
+                    .font(.footnote.weight(.semibold))
+                    .lineLimit(1)
+                    .padding(.top, 2)
+            }
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .frame(maxWidth: 280)
+        .shadow(color: .black.opacity(0.3), radius: 8)
     }
 
     private var topBar: some View {
         HStack(spacing: 10) {
             if !fullscreen {
-                Button(action: onCollapse) {
+                Button { guardTap(onCollapse) } label: {
                     Image(systemName: "chevron.down")
                         .font(.body.weight(.semibold))
                         .frame(width: 44, height: 44)
@@ -287,7 +534,7 @@ struct PlayerControls: View {
     }
 
     private func topButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button { guardTap(action) } label: {
             Image(systemName: icon)
                 .font(.callout.weight(.semibold))
                 .frame(width: 44, height: 44)
@@ -299,7 +546,7 @@ struct PlayerControls: View {
 
     private var centerButtons: some View {
         HStack(spacing: fullscreen ? 72 : 44) {
-            Button { player.seek(by: -10); show() } label: {
+            Button { guardTap { player.seek(by: -10); show() } } label: {
                 Image(systemName: "gobackward.10").font(.title2.weight(.semibold)).frame(width: 56, height: 56)
                     .contentShape(Circle())
             }
@@ -307,8 +554,10 @@ struct PlayerControls: View {
             .accessibilityLabel("Back 10 seconds")
 
             Button {
-                if state.ended { player.seek(to: 0); player.resume() } else { player.togglePlay() }
-                show()
+                guardTap {
+                    if state.ended { player.seek(to: 0); player.resume() } else { player.togglePlay() }
+                    show()
+                }
             } label: {
                 Image(systemName: state.ended ? "arrow.counterclockwise" : (state.playing ? "pause.fill" : "play.fill"))
                     .font(.largeTitle.weight(.bold))
@@ -320,7 +569,7 @@ struct PlayerControls: View {
             .opacity((state.waiting && state.playing) || !state.hasStarted ? 0 : 1)
             .accessibilityLabel(state.ended ? "Replay" : (state.playing ? "Pause" : "Play"))
 
-            Button { player.seek(by: 10); show() } label: {
+            Button { guardTap { player.seek(by: 10); show() } } label: {
                 Image(systemName: "goforward.10").font(.title2.weight(.semibold)).frame(width: 56, height: 56)
                     .contentShape(Circle())
             }
@@ -330,15 +579,22 @@ struct PlayerControls: View {
     }
 
     private var bottomBar: some View {
+        // Interpolates between the page's reports so the time and scrubber move smoothly.
+        TimelineView(.animation(minimumInterval: 1 / 30, paused: !state.playing || scrubbing != nil)) { context in
+            bottomBarContent(now: state.estimatedTime(at: context.date))
+        }
+    }
+
+    private func bottomBarContent(now: Double) -> some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
                 Group {
-                    Text(format(scrubbing ?? state.time))
+                    Text(format(scrubbing ?? now))
                     Text("/").foregroundStyle(.white.opacity(0.6))
                     Text(format(state.duration)).foregroundStyle(.white.opacity(0.8))
                 }
                 .accessibilityHidden(true)
-                if let ch = state.chapter(at: scrubbing ?? state.time) {
+                if let ch = state.chapter(at: scrubbing ?? now) {
                     Text("· \(ch.title)").lineLimit(1).foregroundStyle(.white.opacity(0.9))
                         .accessibilityLabel("Chapter: \(ch.title)")
                 }
@@ -350,7 +606,7 @@ struct PlayerControls: View {
                         .background(.white.opacity(0.2), in: Capsule())
                 }
                 Button {
-                    setOrientation(landscape: !fullscreen)
+                    guardTap { setOrientation(landscape: !fullscreen) }
                 } label: {
                     Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                         .font(.callout.weight(.semibold))
@@ -362,7 +618,7 @@ struct PlayerControls: View {
             }
             .font(.caption.weight(.semibold).monospacedDigit())
             .shadow(color: .black.opacity(0.5), radius: 3)
-            Scrubber(time: state.time, duration: state.duration, buffered: state.buffered,
+            Scrubber(time: now, duration: state.duration, buffered: state.buffered,
                      chapters: state.chapters.map(\.start), segments: state.segments, scrubbing: $scrubbing) { t in
                 player.seek(to: t)
                 scheduleHide()
@@ -371,22 +627,6 @@ struct PlayerControls: View {
     }
 
     // MARK: Helpers
-
-    private func doubleTapSeek(forward: Bool) {
-        // Repeated double taps in the same direction add up, like in YouTube.
-        if let last = lastSeekTap, last.forward == forward, Date().timeIntervalSince(last.at) < 1.0 {
-            seekStack += 10
-        } else {
-            seekStack = 10
-        }
-        lastSeekTap = (forward, Date())
-        player.seek(by: forward ? 10 : -10)
-        feedbackCounter += 1
-        seekFeedback = (forward, feedbackCounter)
-        let id = feedbackCounter
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { if seekFeedback?.id == id { seekFeedback = nil } }
-        app.haptic()
-    }
 
     private func show() {
         visible = true
@@ -411,6 +651,60 @@ struct PlayerControls: View {
 
     private func shareURL(_ v: VideoItem) -> URL {
         state.time > 5 ? URL(string: "https://youtu.be/\(v.id)?t=\(Int(state.time))")! : v.shareURL
+    }
+}
+
+/// Double-tap seek feedback: a soft arc on the tapped side with running arrows and the total.
+struct SeekRipple: View {
+    let forward: Bool
+    let seconds: Int
+    let reduceMotion: Bool
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            ZStack {
+                Ellipse()
+                    .fill(.white.opacity(0.2))
+                    .frame(width: w * 0.8, height: h * 1.7)
+                    .offset(x: (forward ? 1 : -1) * w * 0.55)
+                VStack(spacing: 6) {
+                    arrows
+                    Text("\(seconds) seconds")
+                        .font(.footnote.weight(.semibold).monospacedDigit())
+                        .contentTransition(.numericText())
+                }
+                .foregroundStyle(.white)
+                .shadow(color: .black.opacity(0.4), radius: 4)
+                .offset(x: (forward ? 1 : -1) * w * 0.3)
+            }
+            .frame(width: w, height: h)
+            .clipped()
+        }
+        .animation(.snappy, value: seconds)
+    }
+
+    @ViewBuilder
+    private var arrows: some View {
+        if reduceMotion {
+            row(highlight: nil)
+        } else {
+            PhaseAnimator([0, 1, 2]) { phase in
+                row(highlight: phase)
+            } animation: { _ in .easeInOut(duration: 0.18) }
+        }
+    }
+
+    private func row(highlight: Int?) -> some View {
+        HStack(spacing: 0) {
+            ForEach(0..<3, id: \.self) { i in
+                let index = forward ? i : 2 - i
+                Image(systemName: "play.fill")
+                    .font(.caption.weight(.bold))
+                    .scaleEffect(x: forward ? 1 : -1)
+                    .opacity(highlight.map { $0 == index ? 1 : 0.35 } ?? 1)
+            }
+        }
     }
 }
 
@@ -725,6 +1019,20 @@ struct MiniPlayer: View {
         .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onTapGesture { app.showPlayer = true }
+        // Swipe up to open, swipe left for the next video.
+        .gesture(
+            DragGesture(minimumDistance: 16)
+                .onEnded { g in
+                    let dx = g.translation.width, dy = g.translation.height
+                    if dy < -24, abs(dy) > abs(dx) {
+                        app.showPlayer = true
+                    } else if dx < -50, abs(dx) > abs(dy), app.canPlayNext {
+                        app.haptic()
+                        app.playNext()
+                    }
+                }
+        )
+        .accessibilityAction(named: "Next Video") { app.playNext() }
         .contextMenu {
             Button { app.showPlayer = true } label: { Label("Open Player", systemImage: "arrow.up.left.and.arrow.down.right") }
             Button { app.player.togglePiP() } label: { Label("Picture in Picture", systemImage: "pip.enter") }

@@ -439,12 +439,18 @@ struct SearchScreen: View {
         .searchable(text: $query, prompt: "Search YouTube")
         .searchSuggestions {
             ForEach(suggestions, id: \.self) { s in
-                Label {
-                    Text(s).foregroundStyle(.primary)
-                } icon: {
-                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                // Tapping a suggestion searches right away.
+                Button {
+                    query = s
+                    submit(s)
+                } label: {
+                    Label {
+                        Text(s).foregroundStyle(.primary)
+                    } icon: {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    }
                 }
-                .searchCompletion(s)
+                .tint(.primary)
             }
         }
         .onSubmit(of: .search) { submit(query) }
@@ -463,9 +469,11 @@ struct SearchScreen: View {
         guard !q.isEmpty else { return }
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
         suggestions = []
+        let resubmit = submitted == q
         submitted = q
         model.setSource(.search(q, params: filter.params))
-        Task { await model.reload() }
+        // A new query creates a new list, which loads itself; the same query needs a nudge.
+        if resubmit { Task { await model.reload() } }
         saveRecent([q] + recent.filter { $0.caseInsensitiveCompare(q) != .orderedSame })
     }
 

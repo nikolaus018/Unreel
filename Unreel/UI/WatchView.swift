@@ -7,6 +7,9 @@ struct WatchView: View {
     @State private var showComments = false
     @State private var showDescription = false
     @State private var dragOffset: CGFloat = 0
+    @State private var passedDismissThreshold = false
+    /// The details list is pulled down past its top far enough to minimize on release.
+    @State private var pulledToMinimize = false
 
     private var landscape: Bool { verticalSizeClass == .compact }
 
@@ -14,7 +17,6 @@ struct WatchView: View {
         Group {
             if landscape {
                 playerArea(fullscreen: true)
-                    .gesture(exitFullscreenGesture)
                     .statusBarHidden()
                     .persistentSystemOverlays(.hidden)
                     // Touches near the screen edges go to the player first (its buttons sit there).
@@ -25,15 +27,14 @@ struct WatchView: View {
                         .aspectRatio(16 / 9, contentMode: .fit)
                         .overlay { playerArea(fullscreen: false) }
                         .clipped()
-                        .gesture(minimizeGesture)
                     details
                 }
                 .background(Color(uiColor: .systemBackground))
                 .offset(y: dragOffset)
-                .scaleEffect(1 - min(dragOffset / 3000, 0.08), anchor: .top)
+                .scaleEffect(1 - min(max(dragOffset, 0) / 3000, 0.08), anchor: .top)
             }
         }
-        .background(Color.black.ignoresSafeArea(edges: landscape ? .all : .top).opacity(1 - min(dragOffset / 600, 1)))
+        .background(Color.black.ignoresSafeArea(edges: landscape ? .all : .top).opacity(1 - min(max(dragOffset, 0) / 600, 1)))
         .onAppear { Orientation.shared.setPlayerVisible(true) }
         .onDisappear { Orientation.shared.setPlayerVisible(false) }
         .sheet(isPresented: $showComments) {
@@ -65,40 +66,45 @@ struct WatchView: View {
         })
     }
 
+    /// Portrait: drag the video down to shrink into the mini player, up for full screen.
     /// Full screen: swipe down to leave.
-    private var exitFullscreenGesture: some Gesture {
-        DragGesture(minimumDistance: 20).onEnded { g in
-            if g.translation.height > 60, abs(g.translation.height) > abs(g.translation.width) { setOrientation(landscape: false) }
+    private func verticalDragChanged(_ dy: CGFloat, fullscreen: Bool) {
+        guard !fullscreen else { return }
+        // Downward follows the finger; upward resists, hinting at full screen.
+        dragOffset = dy >= 0 ? dy : -pow(-dy, 0.7)
+        let passed = dy > 120
+        if passed != passedDismissThreshold {
+            passedDismissThreshold = passed
+            app.haptic()
         }
     }
 
-    /// Drag the player down to shrink the watch screen back into the mini player; swipe up for full screen.
-    private var minimizeGesture: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .global)
-            .onChanged { g in
-                guard abs(g.translation.height) > abs(g.translation.width) else { return }
-                dragOffset = max(0, g.translation.height)
-            }
-            .onEnded { g in
-                if g.translation.height < -50, abs(g.translation.height) > abs(g.translation.width) {
-                    withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
-                    setOrientation(landscape: true)
-                } else if g.translation.height > 120 || g.predictedEndTranslation.height > 380 {
-                    app.showPlayer = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dragOffset = 0 }
-                } else {
-                    withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
-                }
-            }
+    private func verticalDragEnded(_ dy: CGFloat, predicted: CGFloat, fullscreen: Bool) {
+        passedDismissThreshold = false
+        if fullscreen {
+            if dy > 60 || predicted > 200 { setOrientation(landscape: false) }
+            return
+        }
+        if dy < -50 || predicted < -250 {
+            withAnimation(.spring(duration: 0.3)) { dragOffset = 0 }
+            setOrientation(landscape: true)
+        } else if dy > 120 || predicted > 380 {
+            app.showPlayer = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { dragOffset = 0 }
+        } else {
+            withAnimation(.spring(duration: 0.35, bounce: 0.25)) { dragOffset = 0 }
+        }
     }
 
     private func playerArea(fullscreen: Bool) -> some View {
         ZStack {
             Color.black.ignoresSafeArea(edges: fullscreen ? .all : [])
-            PlayerSurface(player: app.player).ignoresSafeArea(edges: fullscreen ? .all : [])
-            PlayerControls(state: app.player.state, player: app.player, fullscreen: fullscreen) {
-                if fullscreen { setOrientation(landscape: false) } else { app.showPlayer = false }
-            }
+            ZoomableSurface(state: app.player.state, player: app.player, fullscreen: fullscreen)
+                .ignoresSafeArea(edges: fullscreen ? .all : [])
+            PlayerControls(state: app.player.state, player: app.player, fullscreen: fullscreen,
+                           onCollapse: { if fullscreen { setOrientation(landscape: false) } else { app.showPlayer = false } },
+                           onVerticalDrag: { verticalDragChanged($0, fullscreen: fullscreen) },
+                           onVerticalDragEnd: { verticalDragEnded($0, predicted: $1, fullscreen: fullscreen) })
         }
     }
 
@@ -119,6 +125,21 @@ struct WatchView: View {
                     }
                 }
                 .padding(.bottom, 40)
+            }
+            // Pull the details down past the top and let go to minimize, like the video itself.
+            .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, offset in
+                let pulled = offset < -90
+                if pulled != pulledToMinimize {
+                    pulledToMinimize = pulled
+                    if pulled { app.haptic() }
+                }
+            }
+            .onScrollPhaseChange { old, phase in
+                // Decide when the finger lifts, before the list bounces back.
+                if old == .interacting, phase != .interacting, pulledToMinimize {
+                    pulledToMinimize = false
+                    app.showPlayer = false
+                }
             }
             .onChange(of: app.watch?.videoId) { proxy.scrollTo("top") }
         }
