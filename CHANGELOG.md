@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.1.0 — unreleased
+## 1.1.0 — 2026-11-16
 
 A design pass against Apple's Human Interface Guidelines.
 
