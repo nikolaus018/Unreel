@@ -5,6 +5,7 @@ struct UnreelApp: App {
     @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var settings: AppSettings
     @StateObject private var filters: FilterListManager
+    @StateObject private var library: LocalLibrary
     @StateObject private var app: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var started = false
@@ -14,9 +15,11 @@ struct UnreelApp: App {
         _ = Orientation.shared
         let settings = AppSettings()
         let filters = FilterListManager()
+        let library = LocalLibrary()
         _settings = StateObject(wrappedValue: settings)
         _filters = StateObject(wrappedValue: filters)
-        _app = StateObject(wrappedValue: AppModel(settings: settings, filters: filters))
+        _library = StateObject(wrappedValue: library)
+        _app = StateObject(wrappedValue: AppModel(settings: settings, filters: filters, library: library))
     }
 
     var body: some Scene {
@@ -24,6 +27,7 @@ struct UnreelApp: App {
             RootView(player: app.player)
                 .environmentObject(settings)
                 .environmentObject(filters)
+                .environmentObject(library)
                 .environmentObject(app)
                 .preferredColorScheme(settings.theme.colorScheme)
                 .task { await startUp() }

@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.3.0 — 2026-11-16
+
+Your feed, your rules — with or without a Google account.
+
+- **Feed Control** (You ▸ Feed Control): hide watched videos, block channels and words, and hide
+  single videos from the long-press menu (with Undo). Filters apply to Home, Subscriptions, search
+  and Up Next — and to autoplay — but never to your history, playlists or a channel's own page.
+- **No account needed.** Subscribe to channels on the device; Subscriptions shows their newest
+  uploads and Home mixes them with recommendations based on what you watched. Import and export
+  subscriptions as a Google Takeout CSV. Watch history is kept on the device (You ▸ History).
+- **Resume where you left off**, with a Start Over button, and watched-progress bars on every
+  thumbnail from local history too.
+- **Playlists:** Save to Playlist from the watch page or any long-press menu, create playlists,
+  rename or delete your own, and remove videos from them.
+- **Comments:** like comments and post comments and replies (signed in).
+- **Dislike counts** from Return YouTube Dislike, and optional **DeArrow** titles and thumbnails.
+- **Sleep timer** (15–90 minutes or end of video) and **speed remembered per channel**, in a
+  reorganised playback menu with speed and timer at the top.
+- **Fixes:** notices (SponsorBlock "Undo", "Saved", errors) now appear while the player is open
+  instead of hidden behind it; channel pages show the right Subscribe state (they could read a
+  featured channel's button instead).
+
 ## 1.2.2 — 2026-11-16
 
 Stability pass on the player.

@@ -1,23 +1,40 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Home
 
 struct HomeView: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
     @StateObject private var model: FeedModel
+    /// Without an account YouTube's Home is empty; this one is built on the device instead.
+    @StateObject private var localModel: FeedModel
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, library: LocalLibrary) {
         _model = StateObject(wrappedValue: FeedModel(.browse("FEwhat_to_watch"), hideShorts: { settings.hideShorts }))
+        let local = FeedModel(.local("home"), hideShorts: { settings.hideShorts })
+        local.loader = { [weak library] in
+            guard let library else { return [] }
+            let (recent, channels, watched) = await MainActor.run {
+                (library.history.prefix(8).map(\.video), library.subscriptions,
+                 Set(library.history.filter { $0.fraction >= 0.9 }.map(\.video.id)))
+            }
+            return await LocalFeeds.shared.home(recent: recent, channels: channels, hideShorts: settings.hideShorts, exclude: watched)
+                .map(FeedItem.video)
+        }
+        _localModel = StateObject(wrappedValue: local)
     }
 
+    private var useLocal: Bool { !app.signedIn && (!library.history.isEmpty || !library.subscriptions.isEmpty) }
+
     var body: some View {
-        FeedList(model: model, style: .cards, header: { ExploreChips() }, empty: {
+        FeedList(model: useLocal ? localModel : model, style: .cards, filtering: .discovery, header: { ExploreChips() }, empty: {
             ContentUnavailableView {
                 Label("Nothing Here Yet", systemImage: "play.rectangle.on.rectangle")
             } description: {
                 Text(app.signedIn
                      ? "YouTube has no recommendations for you right now. Search for something to watch."
-                     : "YouTube recommends videos once you've watched a few or signed in.")
+                     : "Watch a few videos or subscribe to channels, and Home fills with recommendations — no account needed.")
             } actions: {
                 Button("Search", systemImage: "magnifyingglass") { app.tab = .search }
                     .buttonStyle(.glassProminent)
@@ -26,6 +43,7 @@ struct HomeView: View {
                 }
             }
         })
+        .id(useLocal)
         .navigationTitle("Home")
         .toolbar { AccountToolbarItem() }
     }
@@ -85,34 +103,127 @@ struct AccountToolbarItem: ToolbarContent {
 
 struct SubscriptionsView: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
     @StateObject private var model: FeedModel
+    @StateObject private var localModel: FeedModel
+    @State private var showImporter = false
 
-    init(settings: AppSettings) {
+    init(settings: AppSettings, library: LocalLibrary) {
         _model = StateObject(wrappedValue: FeedModel(.browse("FEsubscriptions"), hideShorts: { settings.hideShorts }))
+        let local = FeedModel(.local("subscriptions"), hideShorts: { settings.hideShorts })
+        local.loader = { [weak library] in
+            guard let library else { return [] }
+            let channels = await MainActor.run { library.subscriptions }
+            return try await LocalFeeds.shared.subscriptions(channels, hideShorts: settings.hideShorts).map(FeedItem.video)
+        }
+        _localModel = StateObject(wrappedValue: local)
     }
 
     var body: some View {
         Group {
             if app.signedIn {
-                FeedList(model: model, style: .cards, header: { SubscribedChannelsRow() }, empty: {
+                FeedList(model: model, style: .cards, filtering: .discovery, header: { SubscribedChannelsRow() }, empty: {
                     ContentUnavailableView("No New Videos", systemImage: "play.square.stack",
                                            description: Text("Videos from channels you subscribe to show up here."))
                 })
+            } else if library.subscriptions.isEmpty {
+                ContentUnavailableView {
+                    Label("Your Subscriptions", systemImage: "play.square.stack")
+                } description: {
+                    Text("Tap Subscribe on any channel to follow it on this device — no account needed. You can also import your subscriptions from Google Takeout, or sign in.")
+                } actions: {
+                    Button("Import from Takeout…", systemImage: "square.and.arrow.down") { showImporter = true }
+                        .buttonStyle(.glassProminent)
+                    Button("Sign In with Google") { app.showSignIn = true }
+                        .buttonStyle(.glass)
+                }
             } else {
-                SignInPrompt(title: "Your Subscriptions", message: "Sign in to see the latest videos from the channels you follow.", icon: "play.square.stack")
+                FeedList(model: localModel, style: .cards, filtering: .discovery, header: { LocalChannelsRow() }, empty: {
+                    ContentUnavailableView("No Videos", systemImage: "play.square.stack",
+                                           description: Text("The channels you follow haven't posted any videos yet."))
+                })
+                .onChange(of: library.subscriptions) { Task { await localModel.reload() } }
             }
         }
         .navigationTitle("Subscriptions")
         .toolbar {
-            if app.signedIn {
-                ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink(value: Route.browse("FEchannels", "Channels")) {
-                        Image(systemName: "person.2")
-                    }
-                    .accessibilityLabel("All channels")
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink(value: app.signedIn ? Route.browse("FEchannels", "Channels") : Route.localChannels) {
+                    Image(systemName: "person.2")
                 }
+                .accessibilityLabel("All channels")
             }
         }
+        .subscriptionImporter(isPresented: $showImporter)
+    }
+}
+
+/// Picks a Google Takeout subscriptions.csv and imports it into the local subscriptions.
+private struct SubscriptionImporter: ViewModifier {
+    @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
+    @Binding var isPresented: Bool
+
+    func body(content: Content) -> some View {
+        content.fileImporter(isPresented: $isPresented, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+            guard case .success(let url) = result else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't read that file"))
+                return
+            }
+            let n = library.importSubscriptions(csv: text)
+            app.show(Toast(icon: n > 0 ? "checkmark.circle.fill" : "info.circle",
+                           text: n > 0 ? "Imported \(n) channel\(n == 1 ? "" : "s")" : "No new channels in that file"))
+        }
+    }
+}
+
+extension View {
+    func subscriptionImporter(isPresented: Binding<Bool>) -> some View {
+        modifier(SubscriptionImporter(isPresented: isPresented))
+    }
+}
+
+/// The locally followed channels as a row above the local Subscriptions feed.
+struct LocalChannelsRow: View {
+    @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(spacing: 16) {
+                ForEach(library.subscriptions) { c in
+                    Button { app.open(.channel(c.id)) } label: {
+                        VStack(spacing: 6) {
+                            ZStack {
+                                Circle().fill(Color.secondary.opacity(0.15))
+                                Text(c.name.prefix(1)).font(.title2.weight(.semibold)).foregroundStyle(.secondary)
+                                if c.avatar != nil { Avatar(url: c.avatar, size: 58) }
+                            }
+                            .frame(width: 58, height: 58)
+                            Text(c.name.isEmpty ? "Channel" : c.name).font(.caption2).lineLimit(1).frame(width: 64).foregroundStyle(.primary)
+                        }
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel(c.name)
+                    .accessibilityHint("Opens the channel")
+                }
+                NavigationLink(value: Route.localChannels) {
+                    VStack(spacing: 6) {
+                        Image(systemName: "ellipsis").font(.title3.weight(.semibold))
+                            .frame(width: 58, height: 58)
+                            .glassEffect(.regular.interactive(), in: Circle())
+                        Text("All").font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("All channels")
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.bottom, 14)
     }
 }
 
@@ -183,6 +294,7 @@ struct SignInPrompt: View {
 
 struct YouView: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -229,6 +341,21 @@ struct YouView: View {
                 Text("Counted on this device since you installed Unreel.")
             }
 
+            if !app.signedIn {
+                Section {
+                    NavigationLink(value: Route.localHistory) {
+                        LabeledContent { Text("\(library.history.count)") } label: { Label("History", systemImage: "clock.arrow.circlepath") }
+                    }
+                    NavigationLink(value: Route.localChannels) {
+                        LabeledContent { Text("\(library.subscriptions.count)") } label: { Label("Channels", systemImage: "person.2") }
+                    }
+                } header: {
+                    Text("On This Device")
+                } footer: {
+                    Text("Without an account, your history and subscriptions are kept only on this iPhone.")
+                }
+            }
+
             if app.signedIn {
                 Section("Library") {
                     NavigationLink(value: Route.browse("FEhistory", "History")) { Label("History", systemImage: "clock.arrow.circlepath") }
@@ -240,6 +367,7 @@ struct YouView: View {
             }
 
             Section {
+                NavigationLink(value: Route.feedControl) { Label("Feed Control", systemImage: "line.3.horizontal.decrease.circle") }
                 NavigationLink(value: Route.settings) { Label("Settings", systemImage: "gearshape") }
             }
 
@@ -267,7 +395,10 @@ struct YouView: View {
 // MARK: - Generic browse page (history, channels list, playlists overview)
 
 struct BrowseView: View {
+    @EnvironmentObject private var app: AppModel
     @StateObject private var model: FeedModel
+    @State private var showNewPlaylist = false
+    let browseId: String
     let title: String
     let style: FeedStyle
 
@@ -276,15 +407,27 @@ struct BrowseView: View {
         let filter: ((FeedItem) -> Bool)? = browseId == "FElibrary" ? { if case .playlist = $0 { true } else { false } } : nil
         _model = StateObject(wrappedValue: FeedModel(.browse(browseId), hideShorts: { settings.hideShorts }, filter: filter))
         self.title = title
+        self.browseId = browseId
         style = browseId.hasPrefix("FE") && browseId != "FEpodcasts_destination" ? .rows : .cards
     }
 
     var body: some View {
-        FeedList(model: model, style: style) {
+        FeedList(model: model, style: style, filtering: ["FEhistory", "FElibrary", "FEchannels"].contains(browseId) ? .none : .standard) {
             ContentUnavailableView("Nothing Here", systemImage: "tray")
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if browseId == "FElibrary" && app.signedIn {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { showNewPlaylist = true } label: { Image(systemName: "plus") }
+                        .accessibilityLabel("New Playlist")
+                }
+            }
+        }
+        .sheet(isPresented: $showNewPlaylist) {
+            NewPlaylistSheet(videoId: nil) { Task { await model.reload() } }
+        }
     }
 }
 
@@ -292,28 +435,100 @@ struct BrowseView: View {
 
 struct PlaylistView: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model: FeedModel
+    let id: String
     let title: String
+    @State private var renamed: String?
+    @State private var showRename = false
+    @State private var renameText = ""
+    @State private var confirmDelete = false
 
     init(id: String, title: String, settings: AppSettings) {
         _model = StateObject(wrappedValue: FeedModel(.browse("VL" + id), hideShorts: { settings.hideShorts }))
+        self.id = id
         self.title = title
     }
+
+    /// Your own playlists can be edited; YouTube rejects edits to anyone else's.
+    private var editable: Bool { app.signedIn && (id.hasPrefix("PL") || id == "WL") }
 
     private var videos: [VideoItem] {
         model.items.compactMap { if case .video(let v) = $0 { return v } else { return nil } }
     }
 
     var body: some View {
-        FeedList(model: model, style: .rows, header: { header }, empty: {
+        FeedList(model: model, style: .rows, filtering: .none, header: { header }, empty: {
             ContentUnavailableView("Empty Playlist", systemImage: "list.bullet")
         })
         .environment(\.playAction) { video in
             let list = videos
             app.play(video, queue: PlayQueue(title: playlistTitle, items: list, index: list.firstIndex(of: video) ?? 0))
         }
+        .environment(\.removeAction, editable ? { video in remove(video) } : nil)
         .navigationTitle(playlistTitle)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if editable && id != "WL" {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { renameText = playlistTitle; showRename = true } label: { Label("Rename", systemImage: "pencil") }
+                        Button(role: .destructive) { confirmDelete = true } label: { Label("Delete Playlist", systemImage: "trash") }
+                    } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("Playlist Options")
+                }
+            }
+        }
+        .alert("Rename Playlist", isPresented: $showRename) {
+            TextField("Title", text: $renameText)
+            Button("Cancel", role: .cancel) {}
+            Button("Rename") { rename(renameText) }
+        }
+        .confirmationDialog("Delete “\(playlistTitle)”?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete Playlist", role: .destructive) { delete() }
+        } message: {
+            Text("This deletes the playlist from your YouTube account. It can't be undone.")
+        }
+    }
+
+    private func remove(_ video: VideoItem) {
+        app.haptic()
+        model.remove(video.id)
+        Task {
+            do {
+                try await InnerTube.shared.setInPlaylist(id, videoId: video.id, false)
+                app.show(Toast(icon: "minus.circle", text: "Removed from \(playlistTitle)"))
+            } catch {
+                await model.reload()
+                app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't remove the video"))
+            }
+        }
+    }
+
+    private func rename(_ text: String) {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty, t != playlistTitle else { return }
+        let old = renamed
+        renamed = t
+        Task {
+            do { try await InnerTube.shared.renamePlaylist(id, title: t) }
+            catch {
+                renamed = old
+                app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't rename the playlist"))
+            }
+        }
+    }
+
+    private func delete() {
+        Task {
+            do {
+                try await InnerTube.shared.deletePlaylist(id)
+                app.show(Toast(icon: "trash", text: "Playlist deleted"))
+                dismiss()
+            } catch {
+                app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't delete the playlist"))
+            }
+        }
     }
 
     @ViewBuilder
@@ -352,6 +567,7 @@ struct PlaylistView: View {
     }
 
     private var playlistTitle: String {
+        if let renamed { return renamed }
         if title == "Playlist", let t = model.firstPage?["header"].first("title").text { return t }
         return title
     }
@@ -546,6 +762,7 @@ enum SearchFilter: String, CaseIterable, Identifiable {
 struct ChannelView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var library: LocalLibrary
     let id: String
     @State private var page: ChannelPage?
     @State private var tab: ChannelTab?
@@ -563,14 +780,17 @@ struct ChannelView: View {
     }
 
     var body: some View {
-        FeedList(model: model, style: .rows, header: { header }, empty: {
+        FeedList(model: model, style: .rows, filtering: .none, header: { header }, empty: {
             ContentUnavailableView("No Videos", systemImage: "play.rectangle")
         })
         .navigationTitle(page?.channel.name ?? "")
         .navigationBarTitleDisplayMode(.inline)
         .task {
             guard page == nil else { return }
-            if let json = try? await InnerTube.shared.browse(id) { page = Parser.channelPage(json, id: id) }
+            if let json = try? await InnerTube.shared.browse(id) {
+                page = Parser.channelPage(json, id: id)
+                if let c = page?.channel { library.refresh(c) }
+            }
         }
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
@@ -599,12 +819,29 @@ struct ChannelView: View {
                 Spacer(minLength: 0)
             }
             if let p = page {
-                SubscribeButton(subscribed: subscribed ?? p.subscribed ?? false) {
-                    let new = !(subscribed ?? p.subscribed ?? false)
-                    subscribed = new
-                    app.setSubscribed(p.channel, new) { subscribed = !new }
+                let current = subscribed ?? (app.signedIn ? p.subscribed : library.isSubscribed(p.channel.id)) ?? false
+                HStack(spacing: 10) {
+                    SubscribeButton(subscribed: current) {
+                        subscribed = !current
+                        app.setSubscribed(p.channel, !current) { subscribed = current }
+                    }
+                    Spacer()
+                    Menu {
+                        if library.isBlocked(channelId: p.channel.id, name: nil) {
+                            Button { library.unblock(p.channel.id) } label: { Label("Unblock Channel", systemImage: "person.crop.circle.badge.checkmark") }
+                        } else {
+                            Button(role: .destructive) { app.block(p.channel) } label: { Label("Block Channel", systemImage: "person.crop.circle.badge.xmark") }
+                        }
+                        if let speed = library.speed(for: p.channel.id) {
+                            Button { library.setSpeed(settings.defaultSpeed, for: p.channel.id, defaultSpeed: settings.defaultSpeed) } label: {
+                                Label("Forget Speed (\(String(format: "%g×", speed)))", systemImage: "gauge.with.dots.needle.33percent")
+                            }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis").frame(width: 40, height: 40).glassEffect(.regular.interactive(), in: Circle())
+                    }
+                    .accessibilityLabel("More")
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
             }
             if tabs.count > 1 {
                 Picker("Section", selection: Binding(get: { tab ?? tabs.first }, set: { new in

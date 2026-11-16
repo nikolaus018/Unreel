@@ -256,6 +256,11 @@ enum Parser {
 
     // MARK: Comments
 
+    /// Parameters for posting a new comment, from the comments header (signed in only).
+    static func createCommentParams(_ root: J) -> String? {
+        root.first("createCommentEndpoint")["createCommentParams"].string
+    }
+
     static func comments(_ root: J) -> (comments: [Comment], continuation: String?) {
         var out: [Comment] = []
         var continuation: String?
@@ -287,8 +292,14 @@ enum Parser {
 
     private static func comment(_ r: J) -> Comment? {
         guard let id = r["commentId"].string else { return nil }
+        let like = r["actionButtons"].first("likeButton")
         return Comment(
             id: id,
+            likeAction: like.first("defaultServiceEndpoint").first("performCommentActionEndpoint")["action"].string,
+            unlikeAction: like.first("toggledServiceEndpoint").first("performCommentActionEndpoint")["action"].string,
+            isLiked: r["isLiked"].bool ?? (r["voteStatus"].string == "LIKE"),
+            replyParams: r["actionButtons"].first("createCommentReplyEndpoint")["createReplyParams"].string
+                ?? r["actionButtons"].first("createCommentReplyDialogEndpoint").first("createReplyParams").string,
             author: r["authorText"].text ?? "",
             avatar: r["authorThumbnail"].thumbnailURL,
             text: r["contentText"].text ?? "",
@@ -320,9 +331,20 @@ enum Parser {
         }
         var page = ChannelPage(channel: ChannelItem(id: id, name: name, avatar: avatar, subtitle: details.first { $0.contains("subscriber") }),
                                handle: handle, banner: banner, details: details, tabs: tabs)
-        page.subscribed = root.first("subscribeButtonRenderer")["subscribed"].bool
-            ?? root.first("subscriptionStateEntity")["subscribed"].bool
+        page.subscribed = channelSubscribed(root)
         return page
+    }
+
+    /// The channel's own subscription state. Featured-channel shelves on the page carry their own
+    /// subscribe buttons, so the header's button is matched to its state entity by key.
+    static func channelSubscribed(_ root: J) -> Bool? {
+        let header = root["header"]
+        if let key = header.first("subscribeButtonViewModel")["stateEntityStoreKey"].string {
+            for m in root["frameworkUpdates"]["entityBatchUpdate"]["mutations"].array where m["entityKey"].string == key {
+                if let s = m["payload"]["subscriptionStateEntity"]["subscribed"].bool { return s }
+            }
+        }
+        return header.first("subscribeButtonRenderer")["subscribed"].bool
     }
 
     // MARK: Account

@@ -32,6 +32,10 @@ final class PlaybackState: ObservableObject {
     @Published var videoAspect: Double = 16 / 9
     /// Full screen: the picture fills the screen (cropped) instead of fitting.
     @Published var zoomToFill = false
+    /// Sleep timer: pause at this time, or when the current video ends.
+    @Published var sleepDeadline: Date?
+    @Published var sleepMinutes: Int?
+    @Published var sleepAtEnd = false
     /// When `time` was last reported, to interpolate between reports.
     var timeStamp = Date()
 
@@ -66,6 +70,13 @@ final class PlayerController: NSObject, ObservableObject {
     private var pendingSeek: (time: Double, at: Date)?
     var onSkippedSegment: ((String, Int) -> Void)?
     var onPiPUnavailable: (() -> Void)?
+    /// The viewer picked a speed in the playback menu (not the hold-for-2× boost).
+    var onRateChosen: ((Double) -> Void)?
+    /// The sleep timer paused playback.
+    var onSleep: (() -> Void)?
+    /// Speed for the current video (remembered for its channel); nil means the default speed.
+    private(set) var preferredRate: Double?
+    private var sleepTask: Task<Void, Never>?
 
     private var cancellables = Set<AnyCancellable>()
     private let sponsorBlock = SponsorBlockClient()
@@ -289,6 +300,7 @@ final class PlayerController: NSObject, ObservableObject {
         state.waiting = true
         state.isAd = false
         state.videoAspect = 16 / 9
+        preferredRate = nil
         pendingSeek = nil
         load(video.id, start: start)
         updateNowPlaying()
@@ -358,6 +370,52 @@ final class PlayerController: NSObject, ObservableObject {
         js("setRate(\(r))")
     }
     func setQuality(_ q: String) { js("setQuality('\(q)')") }
+
+    /// A speed picked in the playback menu: applied and reported so it can be remembered.
+    func chooseRate(_ r: Double) {
+        preferredRate = r
+        setRate(r)
+        onRateChosen?(r)
+    }
+
+    /// Sets the speed for the current video once it plays (or right away if it already does).
+    func applyPreferredRate(_ r: Double?) {
+        preferredRate = r
+        let target = r ?? settings.defaultSpeed
+        if state.hasStarted, abs(state.rate - target) > 0.01 { setRate(target) }
+    }
+
+    // MARK: Sleep timer
+
+    /// Pauses after `minutes`, or at the end of the current video when `minutes` is nil; `off` cancels.
+    func setSleepTimer(minutes: Int?, off: Bool = false) {
+        sleepTask?.cancel()
+        sleepTask = nil
+        state.sleepDeadline = nil
+        state.sleepMinutes = nil
+        state.sleepAtEnd = false
+        guard !off else { return }
+        guard let minutes else { state.sleepAtEnd = true; return }
+        let deadline = Date().addingTimeInterval(TimeInterval(minutes * 60))
+        state.sleepDeadline = deadline
+        state.sleepMinutes = minutes
+        sleepTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(deadline.timeIntervalSinceNow))
+            guard !Task.isCancelled, let self else { return }
+            self.sleepNow()
+        }
+    }
+
+    /// Pauses for the sleep timer and clears it.
+    func sleepNow() {
+        sleepTask?.cancel()
+        sleepTask = nil
+        state.sleepDeadline = nil
+        state.sleepMinutes = nil
+        state.sleepAtEnd = false
+        pause()
+        onSleep?()
+    }
     func togglePiP() {
         let script = """
         const v = document.querySelector('#movie_player video') || document.querySelector('video');
@@ -585,6 +643,10 @@ final class PlayerController: NSObject, ObservableObject {
             if s.playing && s.time > 0.05 && !s.isAd && !s.hasStarted {
                 s.hasStarted = true
                 loadCaptionTracks()
+                // The page applies the default speed; switch to the channel's speed, or back to
+                // the default if the previous video ran at another one.
+                let target = preferredRate ?? settings.defaultSpeed
+                if abs(s.rate - target) > 0.01 { setRate(target) }
             }
             if settings.keepScreenOn { UIApplication.shared.isIdleTimerDisabled = s.playing }
             if settings.lockScreenControls, !s.isAd { updateNowPlaying() }

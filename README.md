@@ -6,9 +6,9 @@
 
 **YouTube without ads, without Shorts, without sponsor reads — as a native iOS 26 app.**
 
-![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.2.2-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
+![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.3.0-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
 
-<img src="docs/screenshots/watch.png" width="230" alt="Watch screen"> <img src="docs/screenshots/search.png" width="230" alt="Search"> <img src="docs/screenshots/comments.png" width="230" alt="Comments"> <img src="docs/screenshots/settings.png" width="230" alt="Settings with the mini player">
+<img src="docs/screenshots/watch.png" width="230" alt="Watch screen with dislike count and the resume notice"> <img src="docs/screenshots/search.png" width="230" alt="Search"> <img src="docs/screenshots/comments.png" width="230" alt="Comments"> <img src="docs/screenshots/feed-control.png" width="230" alt="Feed Control with blocked words">
 
 <img src="docs/screenshots/fullscreen.png" width="700" alt="Full-screen player">
 
@@ -41,6 +41,13 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 - **No ads.** Video ads, banners and promoted results never appear. See [How ad blocking works](#how-ad-blocking-works).
 - **No Shorts** in Home, Subscriptions, search or channel pages. Links to Shorts still open, in the regular player.
 - **SponsorBlock** skips sponsor reads, self-promotion and "like and subscribe" reminders (you choose the categories). Segments are marked green on the scrubber, and an Undo notice appears after each skip.
+- **Feed Control:** hide watched videos, block channels and words, or hide single videos (long-press ▸ Hide Video / Block Channel). Applies to Home, Subscriptions, search and Up Next, never to your own history or playlists.
+- **DeArrow** (optional) swaps clickbait titles and thumbnails for community-written ones.
+
+**No account needed**
+- Subscribe to channels on the device: Subscriptions then shows their newest uploads, and Home fills with recommendations based on what you watched and follow.
+- Import your subscriptions from a Google Takeout `subscriptions.csv`, and export them again.
+- History and resume positions are kept on the device, with watched-progress bars on every thumbnail.
 
 **Player**
 - Liquid Glass controls: play/pause, ±10 s, a smoothly moving scrubber that shows what's loaded, chapter marks and the current chapter's name.
@@ -48,7 +55,9 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 - Swipe left or right across the video to scrub, with a large time readout and the chapter you'll land in.
 - Press and hold for 2× speed.
 - Pinch in full screen to zoom the picture to fill the screen, and pinch back to fit.
-- Speed, quality and captions menu.
+- Speed, sleep timer, quality and captions menu. The speed you pick is remembered per channel.
+- **Resumes where you left off**, with a Start Over button.
+- **Dislike counts** from Return YouTube Dislike next to the thumbs-down.
 - Rotation like the YouTube app: turn the phone to go fullscreen and back. The fullscreen button forces landscape while you hold the phone upright, swipe up on the video for fullscreen and swipe down to leave. Swiping down from the top edge in fullscreen still opens Notification Center and Control Center.
 - Drag the video (or pull the page below it) down to shrink it into the **mini player** above the tab bar (play/pause, next, close). The mini player keeps showing the video as it plays. Swipe up on it to open it, or left for the next video.
 - Lock-screen and headphone Next skips straight to the next video; Previous goes back in a playlist or restarts the video.
@@ -61,10 +70,11 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 - **Subscriptions:** a row of your channels and the latest uploads.
 - **You:** History, Watch Later, Liked videos, Playlists, Channels, the ads-blocked stats and Settings.
 - **Search:** native search field with suggestions and recent searches, plus All / Videos / Channels / Playlists / Live filters. Paste a copied YouTube link to open it.
-- **Watch page:** like/dislike, Subscribe, Save to Watch Later, Share, PiP; a description sheet with working links, tappable timestamps and a chapter list; comments with reply threads; Up Next.
-- **Playlists:** Play All and Shuffle. Playing from a playlist builds a queue that Next and autoplay follow.
-- **Channels:** banner, stats, Subscribe, and Videos / Live / Playlists tabs.
-- **Long-press any video:** Play, Play Next, Go to Channel, Save to Watch Later, Share, Copy Link.
+- **Watch page:** like/dislike, Subscribe, Watch Later, Save to Playlist, Share, PiP; a description sheet with working links, tappable timestamps and a chapter list; comments with reply threads; Up Next.
+- **Comments:** like comments, post comments and replies (signed in).
+- **Playlists:** Play All and Shuffle. Playing from a playlist builds a queue that Next and autoplay follow. Create, rename and delete your playlists, add any video to them and remove videos.
+- **Channels:** banner, stats, Subscribe, block, and Videos / Live / Playlists tabs.
+- **Long-press any video:** Play, Play Next, Go to Channel, Save to Watch Later, Save to Playlist, Share, Copy Link, Hide Video, Block Channel.
 
 **Everything else**
 - Google sign-in, with personal feeds and account actions.
@@ -74,7 +84,7 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 
 ## Install
 
-1. Download `Unreel-1.2.2.ipa` from the [latest release](../../releases/latest).
+1. Download `Unreel-1.3.0.ipa` from the [latest release](../../releases/latest).
 2. Sign and install it with your sideloading tool (AirRefresh, Sideloadly, AltStore, …).
    There are no app extensions, so one free-account app ID is enough.
 3. Open Unreel, then sign in from **You ▸ Sign In with Google** if you want your feeds.
@@ -97,7 +107,7 @@ Requires iOS 26.1 or later.
 | Swipe up / left | Mini player | Open the player / next video |
 | Turn the phone | Player open | Enter / leave full screen |
 | Drag the scrubber | Controls | Seek, with a tick at each chapter |
-| Long-press | Any video | Play Next, Watch Later, Share… |
+| Long-press | Any video | Play Next, Save to Playlist, Hide, Block Channel… |
 | Long-press | Mini player | Open, PiP, Close |
 | Space / ← → / F | Player (hardware keyboard) | Play-pause / seek 10 s / full screen |
 
@@ -123,8 +133,13 @@ anyway.
 ## Privacy
 
 - No analytics or tracking in the app. Network traffic goes to YouTube/Google, the filter-list
-  hosts (`ublockorigin.github.io`) and SponsorBlock (`sponsor.ajay.app`, which only receives
-  the first characters of a hash of the video ID).
+  hosts (`ublockorigin.github.io`), SponsorBlock and DeArrow (`sponsor.ajay.app`, which only
+  receive the first characters of a hash of the video ID), DeArrow thumbnails
+  (`dearrow-thumb.ajay.app`, only when that option is on) and Return YouTube Dislike
+  (`returnyoutubedislikeapi.com`, which receives the ID of the video you open; turn off
+  **Show Dislikes** to stop that).
+- History, resume positions, local subscriptions, blocked channels and words are stored only on
+  the device (Application Support). **You ▸ History ▸ Clear** removes the history.
 - Your Google sign-in lives in the app's web storage on the device. **You ▸ Sign Out** deletes it.
 - Debug builds save the last API response per endpoint in the app's Caches folder for
   troubleshooting. Release builds don't.
@@ -162,7 +177,7 @@ Refresh the bundled filter snapshot with `Scripts/update-bundled-filters.sh`.
 | Area | Files |
 | --- | --- |
 | App state, navigation, queue, rotation | `Unreel/App/` |
-| InnerTube client, models, parser, paged feeds | `Unreel/Data/` |
+| InnerTube client, models, parser, paged feeds, on-device library and feeds, RYD/DeArrow | `Unreel/Data/` |
 | Player bridge, Now Playing, SponsorBlock | `Unreel/Player/` |
 | Filter lists: parsing, downloading, compiling | `Unreel/Blocking/` |
 | In-page engine: ad cleaning, scriptlets, player-only mode | `Unreel/Resources/JS/engine.js` |
@@ -170,9 +185,10 @@ Refresh the bundled filter snapshot with `Scripts/update-bundled-filters.sh`.
 
 ## Known limitations
 
-- You can't post or like comments, or create and edit playlists.
-- Home stays nearly empty when you're signed out: YouTube no longer gives anonymous visitors a
-  home feed.
+- Comment actions, posting and playlist editing use the same API as YouTube's site and only
+  work signed in; YouTube may refuse them for some videos (comments off, kids content).
+- Without an account, Home is built from the channels you follow and the videos you watched, so
+  it starts empty until you do either.
 - Unreel depends on YouTube's internal API and web player. When YouTube changes them, parts of
   the app can break until they're updated. Ad-blocking fixes usually arrive through the filter
   lists without an app update.

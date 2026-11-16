@@ -7,10 +7,20 @@ private struct PlayActionKey: EnvironmentKey {
     static let defaultValue: ((VideoItem) -> Void)? = nil
 }
 
+private struct RemoveActionKey: EnvironmentKey {
+    static let defaultValue: ((VideoItem) -> Void)? = nil
+}
+
 extension EnvironmentValues {
     var playAction: ((VideoItem) -> Void)? {
         get { self[PlayActionKey.self] }
         set { self[PlayActionKey.self] = newValue }
+    }
+
+    /// Set by lists the video can be removed from (your playlists, history).
+    var removeAction: ((VideoItem) -> Void)? {
+        get { self[RemoveActionKey.self] }
+        set { self[RemoveActionKey.self] = newValue }
     }
 }
 
@@ -34,11 +44,13 @@ struct Thumbnail: View {
     let video: VideoItem
     var cornerRadius: CGFloat = 14
     var small = false
+    /// A community (DeArrow) thumbnail to show instead of YouTube's.
+    var override: URL?
 
     var body: some View {
         Color.clear
             .aspectRatio(16 / 9, contentMode: .fit)
-            .overlay { RemoteImage(url: small ? video.smallThumbnail : video.thumbnail) }
+            .overlay { RemoteImage(url: override ?? (small ? video.smallThumbnail : video.thumbnail)) }
             .overlay(alignment: .bottomLeading) {
                 if let p = video.progress, p > 0 {
                     GeometryReader { geo in
@@ -131,15 +143,49 @@ extension VideoItem {
     }
 }
 
+/// Applies what the device knows to a feed video: local watch progress and DeArrow branding.
+private struct VideoPresentation: ViewModifier {
+    @EnvironmentObject private var settings: AppSettings
+    let video: VideoItem
+    @Binding var branding: DeArrowClient.Branding?
+
+    func body(content: Content) -> some View {
+        content.task(id: "\(video.id)|\(settings.deArrowTitles)|\(settings.deArrowThumbnails)") {
+            guard settings.deArrowTitles || settings.deArrowThumbnails else { branding = nil; return }
+            branding = await DeArrowClient.shared.branding(for: video.id)
+        }
+    }
+}
+
+extension LocalLibrary {
+    /// The video as a cell shows it.
+    func presented(_ video: VideoItem, branding: DeArrowClient.Branding?, settings: AppSettings) -> VideoItem {
+        var v = video
+        let f = watchedFraction(video)
+        if f > 0.01 { v.progress = f }
+        if settings.deArrowTitles, let t = branding?.title { v.title = t }
+        return v
+    }
+
+    func thumbnailOverride(_ video: VideoItem, branding: DeArrowClient.Branding?, settings: AppSettings) -> URL? {
+        guard settings.deArrowThumbnails, let t = branding?.thumbnailTime else { return nil }
+        return DeArrowClient.thumbnailURL(videoId: video.id, time: t)
+    }
+}
+
 struct VideoCard: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.playAction) private var playAction
     let video: VideoItem
+    @State private var branding: DeArrowClient.Branding?
 
     var body: some View {
+        let video = library.presented(self.video, branding: branding, settings: settings)
         // Separate buttons, so the avatar can open the channel while the rest plays the video.
         VStack(alignment: .leading, spacing: 10) {
-            Button(action: play) { Thumbnail(video: video) }
+            Button(action: play) { Thumbnail(video: video, override: library.thumbnailOverride(video, branding: branding, settings: settings)) }
                 .buttonStyle(.pressable)
             HStack(alignment: .top, spacing: 12) {
                 if video.channelAvatar != nil {
@@ -173,6 +219,7 @@ struct VideoCard: View {
         }
         .videoAccessibility(video, play: play)
         .videoContextMenu(video)
+        .modifier(VideoPresentation(video: self.video, branding: $branding))
     }
 
     private func play() {
@@ -182,18 +229,23 @@ struct VideoCard: View {
 
 struct VideoRow: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
+    @EnvironmentObject private var settings: AppSettings
     @Environment(\.playAction) private var playAction
     @Environment(\.dynamicTypeSize) private var typeSize
     let video: VideoItem
+    @State private var branding: DeArrowClient.Branding?
 
     var body: some View {
+        let video = library.presented(self.video, branding: branding, settings: settings)
         Button(action: play) {
             // At accessibility text sizes the thumbnail moves above the text so titles stay readable.
             let layout = typeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
                 : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
             layout {
-                Thumbnail(video: video, cornerRadius: 10, small: !typeSize.isAccessibilitySize)
+                Thumbnail(video: video, cornerRadius: 10, small: !typeSize.isAccessibilitySize,
+                          override: library.thumbnailOverride(video, branding: branding, settings: settings))
                     .frame(width: typeSize.isAccessibilitySize ? nil : 164)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(video.title)
@@ -211,6 +263,7 @@ struct VideoRow: View {
         .buttonStyle(.pressable)
         .videoAccessibility(video, play: play)
         .videoContextMenu(video)
+        .modifier(VideoPresentation(video: self.video, branding: $branding))
     }
 
     private func play() {
@@ -245,6 +298,7 @@ struct ChannelRow: View {
             ShareLink(item: URL(string: "https://www.youtube.com/channel/\(channel.id)")!) {
                 Label("Share", systemImage: "square.and.arrow.up")
             }
+            Button(role: .destructive) { app.block(channel) } label: { Label("Block Channel", systemImage: "person.crop.circle.badge.xmark") }
         }
     }
 }
@@ -329,6 +383,7 @@ extension View {
 
 private struct VideoContextMenu: ViewModifier {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.removeAction) private var removeAction
     let video: VideoItem
 
     func body(content: Content) -> some View {
@@ -345,11 +400,23 @@ private struct VideoContextMenu: ViewModifier {
                     ? Label("Remove from Watch Later", systemImage: "clock.fill")
                     : Label("Save to Watch Later", systemImage: "clock")
             }
+            Button { app.showAddToPlaylist(video) } label: { Label("Save to Playlist…", systemImage: "text.badge.plus") }
             ShareLink(item: video.shareURL) { Label("Share", systemImage: "square.and.arrow.up") }
             Button {
                 UIPasteboard.general.url = video.shareURL
                 app.show(Toast(icon: "link", text: "Link copied"))
             } label: { Label("Copy Link", systemImage: "link") }
+            Divider()
+            if let removeAction {
+                Button(role: .destructive) { removeAction(video) } label: { Label("Remove", systemImage: "minus.circle") }
+            } else {
+                Button { app.hide(video) } label: { Label("Hide Video", systemImage: "eye.slash") }
+            }
+            if video.channelId != nil || video.channelName != nil {
+                Button(role: .destructive) {
+                    app.block(ChannelItem(id: video.channelId ?? "name:" + (video.channelName ?? ""), name: video.channelName ?? ""))
+                } label: { Label("Block Channel", systemImage: "person.crop.circle.badge.xmark") }
+            }
         } preview: {
             VStack(alignment: .leading, spacing: 8) {
                 Thumbnail(video: video, cornerRadius: 0)
@@ -365,10 +432,23 @@ private struct VideoContextMenu: ViewModifier {
 
 enum FeedStyle { case cards, rows }
 
+/// Which of the feed-control rules a list applies.
+enum FeedFiltering {
+    /// Your own lists (history, playlists): shown as they are.
+    case none
+    /// Hidden videos, blocked channels and keywords.
+    case standard
+    /// Also hides watched videos when that setting is on (Home, Subscriptions, Up Next).
+    case discovery
+}
+
 struct FeedList<Header: View, Empty: View>: View {
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
+    @EnvironmentObject private var settings: AppSettings
     @ObservedObject var model: FeedModel
     var style: FeedStyle = .cards
+    var filtering: FeedFiltering = .standard
     @ViewBuilder var header: () -> Header
     @ViewBuilder var empty: () -> Empty
 
@@ -400,15 +480,36 @@ struct FeedList<Header: View, Empty: View>: View {
         } else if model.items.isEmpty {
             empty().padding(.top, 40)
         } else {
-            let columns = [GridItem(.adaptive(minimum: style == .cards ? 330 : 500), spacing: 18, alignment: .top)]
-            LazyVGrid(columns: columns, alignment: .leading, spacing: style == .cards ? 26 : 16) {
-                ForEach(model.items) { item in
-                    cell(item).onAppear { model.itemAppeared(item) }
+            let shown = shownItems
+            if shown.isEmpty {
+                if model.canLoadMore {
+                    // Everything on this page was filtered out: fetch the next one.
+                    ProgressView().padding(.vertical, 40)
+                        .task(id: model.items.count) { await model.loadMore() }
+                } else {
+                    ContentUnavailableView("Everything Here Is Hidden", systemImage: "eye.slash",
+                                           description: Text("Your feed filters hide all of these videos. Change them in Settings ▸ Feed Control."))
+                        .padding(.top, 40)
+                }
+            } else {
+                let columns = [GridItem(.adaptive(minimum: style == .cards ? 330 : 500), spacing: 18, alignment: .top)]
+                LazyVGrid(columns: columns, alignment: .leading, spacing: style == .cards ? 26 : 16) {
+                    ForEach(shown) { item in
+                        cell(item).onAppear { model.itemAppeared(item, in: shown) }
+                    }
                 }
             }
             if model.isLoadingMore {
                 ProgressView().padding(.vertical, 20)
             }
+        }
+    }
+
+    private var shownItems: [FeedItem] {
+        switch filtering {
+        case .none: model.items
+        case .standard: model.items.filter { library.allows($0, hideWatched: false) }
+        case .discovery: model.items.filter { library.allows($0, hideWatched: settings.hideWatched) }
         }
     }
 
@@ -424,8 +525,8 @@ struct FeedList<Header: View, Empty: View>: View {
 }
 
 extension FeedList where Header == EmptyView {
-    init(model: FeedModel, style: FeedStyle = .cards, @ViewBuilder empty: @escaping () -> Empty) {
-        self.init(model: model, style: style, header: { EmptyView() }, empty: empty)
+    init(model: FeedModel, style: FeedStyle = .cards, filtering: FeedFiltering = .standard, @ViewBuilder empty: @escaping () -> Empty) {
+        self.init(model: model, style: style, filtering: filtering, header: { EmptyView() }, empty: empty)
     }
 }
 

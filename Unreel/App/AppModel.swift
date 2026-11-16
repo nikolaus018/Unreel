@@ -19,6 +19,7 @@ enum RootTab: Hashable {
 final class AppModel: ObservableObject {
     let settings: AppSettings
     let filters: FilterListManager
+    let library: LocalLibrary
     let player: PlayerController
 
     @Published var tab: RootTab = .home
@@ -45,10 +46,29 @@ final class AppModel: ObservableObject {
 
     private var watchTask: Task<Void, Never>?
 
-    init(settings: AppSettings, filters: FilterListManager) {
+    /// Video to add to a playlist (shows the playlist picker).
+    @Published var addToPlaylist: VideoItem?
+    private var progressCancellable: Any?
+    private var lastProgressSave = Date.distantPast
+
+    init(settings: AppSettings, filters: FilterListManager, library: LocalLibrary) {
         self.settings = settings
         self.filters = filters
+        self.library = library
         self.player = PlayerController(settings: settings, filters: filters)
+        player.onRateChosen = { [weak self] rate in
+            guard let self, self.settings.rememberChannelSpeed,
+                  let channel = self.watch?.channel ?? self.player.current?.channelId.map({ ChannelItem(id: $0, name: "") }) else { return }
+            self.library.setSpeed(rate, for: channel.id, defaultSpeed: self.settings.defaultSpeed)
+        }
+        player.onSleep = { [weak self] in
+            self?.cancelUpNext()
+            self?.show(Toast(icon: "moon.zzz.fill", text: "Sleep timer paused the video"))
+        }
+        // Remember how far each video got (for resuming and hiding watched videos).
+        progressCancellable = player.state.$time.sink { [weak self] _ in
+            Task { @MainActor in self?.saveProgress() }
+        }
         player.onEnded = { [weak self] in self?.videoEnded() }
         player.onNext = { [weak self] in self?.playNext() }
         player.onPrevious = { [weak self] in self?.playPrevious() }
@@ -83,6 +103,37 @@ final class AppModel: ObservableObject {
         showPlayer = true
     }
 
+    /// Where a video should start: the given time, or where it was left off.
+    private func startTime(for video: VideoItem, requested: Double) -> Double {
+        guard requested == 0, settings.resumePlayback, player.current?.id != video.id else { return requested }
+        if let t = library.resumePosition(for: video.id) { return t }
+        // YouTube's own marker (signed in), when the duration is known.
+        if let p = video.progress, p > 0.03, p < 0.93, let d = video.duration.flatMap(Self.seconds(fromDuration:)), d > 120 {
+            return (p * d).rounded()
+        }
+        return 0
+    }
+
+    /// "1:02:03" -> 3723
+    nonisolated static func seconds(fromDuration text: String) -> Double? {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        guard !parts.isEmpty, parts.count <= 3, parts.count == text.split(separator: ":").count else { return nil }
+        return Double(parts.reduce(0) { $0 * 60 + $1 })
+    }
+
+    private func saveProgress(force: Bool = false) {
+        let s = player.state
+        guard let v = player.current, s.hasStarted, !s.isAd, s.duration > 0,
+              force || s.ended || Date().timeIntervalSince(lastProgressSave) > 5 else { return }
+        lastProgressSave = Date()
+        var video = v
+        if let w = watch, w.videoId == v.id {
+            if !w.title.isEmpty { video.title = w.title }
+            if let c = w.channel { video.channelId = c.id; video.channelName = c.name; video.channelAvatar = c.avatar ?? video.channelAvatar }
+        }
+        library.updateProgress(video, position: s.ended ? s.duration : s.time, duration: s.duration)
+    }
+
     /// Plays the queue's item at `index` without opening the player.
     func jump(to index: Int) {
         guard var q = queue, q.items.indices.contains(index) else { return }
@@ -94,8 +145,17 @@ final class AppModel: ObservableObject {
 
     private func start(_ video: VideoItem, at time: Double = 0) {
         cancelUpNext()
-        player.play(video, start: time)
+        saveProgress(force: true)
+        let t = startTime(for: video, requested: time)
+        let resumed = time == 0 && t > 0
+        player.play(video, start: t)
+        if settings.rememberChannelSpeed { player.applyPreferredRate(library.speed(for: video.channelId)) }
         loadWatch(video)
+        if resumed {
+            show(Toast(icon: "clock.arrow.circlepath", text: "Resumed at \(format(t))", actionTitle: "Start Over") { [weak self] in
+                self?.player.seek(to: 0)
+            })
+        }
     }
 
     private func loadWatch(_ video: VideoItem) {
@@ -121,7 +181,13 @@ final class AppModel: ObservableObject {
                 if details.channel == nil, let id = video.channelId {
                     details.channel = ChannelItem(id: id, name: video.channelName ?? "", avatar: video.channelAvatar)
                 }
+                if let c = details.channel {
+                    if !signedIn { details.subscribed = library.isSubscribed(c.id) }
+                    library.refresh(c)
+                    if settings.rememberChannelSpeed, video.channelId != c.id { player.applyPreferredRate(library.speed(for: c.id)) }
+                }
                 watch = details
+                if settings.returnDislike { loadDislikes(video.id) }
                 player.state.chapters = details.chapters
                 player.updateMetadata(title: details.title, channel: details.channel?.name)
             } catch {
@@ -131,6 +197,14 @@ final class AppModel: ObservableObject {
                     watch?.isPlaceholder = false
                 }
             }
+        }
+    }
+
+    private func loadDislikes(_ id: String) {
+        Task {
+            guard let votes = await DislikeClient.shared.votes(for: id), watch?.videoId == id else { return }
+            watch?.dislikes = votes.dislikes
+            if watch?.likes == nil { watch?.likes = votes.likes.formatted(.number.notation(.compactName)) }
         }
     }
 
@@ -149,7 +223,7 @@ final class AppModel: ObservableObject {
     private func nextCandidate(automatic: Bool) -> VideoItem? {
         if let q = queue, q.hasNext { return q.items[q.index + 1] }
         if automatic && !settings.autoplayNext { return nil }
-        return watch?.related.first(where: { !$0.isLive })
+        return watch?.related.first(where: { !$0.isLive && library.allows(.video($0), hideWatched: settings.hideWatched) })
     }
 
     func playNext(automatic: Bool = false) {
@@ -170,6 +244,8 @@ final class AppModel: ObservableObject {
 
     /// A video finished: count down on screen, or continue right away in the background/PiP.
     private func videoEnded() {
+        saveProgress(force: true)
+        if player.state.sleepAtEnd { player.sleepNow(); return }
         guard let next = nextCandidate(automatic: true) else { return }
         let visible = showPlayer && UIApplication.shared.applicationState == .active && !player.state.pip
         guard visible else { advance(to: next); return }
@@ -254,8 +330,15 @@ final class AppModel: ObservableObject {
 
     /// Returns the new state immediately; reverts through `onFailure` if the request fails.
     func setSubscribed(_ channel: ChannelItem, _ subscribed: Bool, onFailure: @escaping () -> Void = {}) {
-        guard requireSignIn() else { onFailure(); return }
         haptic()
+        guard signedIn else {
+            // Without an account, subscriptions live on the device.
+            library.setSubscribed(channel, subscribed)
+            if watch?.channel?.id == channel.id { watch?.subscribed = subscribed }
+            if subscribed { successHaptic() }
+            show(Toast(icon: subscribed ? "bell.fill" : "bell.slash", text: subscribed ? "Subscribed to \(channel.name) on this device" : "Unsubscribed"))
+            return
+        }
         if watch?.channel?.id == channel.id { watch?.subscribed = subscribed }
         Task {
             do {
@@ -285,6 +368,30 @@ final class AppModel: ObservableObject {
                 show(Toast(icon: "exclamationmark.triangle", text: "Couldn't update Watch Later"))
             }
         }
+    }
+
+    /// Opens the playlist picker for a video (signed in), or asks to sign in.
+    func showAddToPlaylist(_ video: VideoItem) {
+        guard requireSignIn() else { return }
+        addToPlaylist = video
+    }
+
+    // MARK: Feed control
+
+    func hide(_ video: VideoItem) {
+        haptic()
+        library.hide(video)
+        show(Toast(icon: "eye.slash", text: "Video hidden", actionTitle: "Undo") { [weak self] in
+            self?.library.unhide(video.id)
+        })
+    }
+
+    func block(_ channel: ChannelItem) {
+        haptic()
+        library.block(channel)
+        show(Toast(icon: "person.crop.circle.badge.xmark", text: "You won't see \(channel.name.isEmpty ? "this channel" : channel.name)", actionTitle: "Undo") { [weak self] in
+            self?.library.unblock(channel.id)
+        })
     }
 
     func closePlayer() {

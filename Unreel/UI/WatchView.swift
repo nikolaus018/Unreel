@@ -3,6 +3,7 @@ import SwiftUI
 struct WatchView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var library: LocalLibrary
     @Environment(\.verticalSizeClass) private var verticalSizeClass
     @State private var showComments = false
     @State private var showDescription = false
@@ -36,11 +37,22 @@ struct WatchView: View {
             }
         }
         .background(Color.black.ignoresSafeArea(edges: landscape ? .all : .top).opacity(1 - min(max(dragOffset, 0) / 600, 1)))
+        .overlay(alignment: .bottom) {
+            if let toast = app.toast {
+                ToastView(toast: toast) { app.toast = nil }
+                    .padding(.bottom, landscape ? 16 : 24)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
         .onAppear { Orientation.shared.setPlayerVisible(true) }
         .onDisappear { Orientation.shared.setPlayerVisible(false) }
+        .sheet(item: Binding(get: { app.showPlayer ? app.addToPlaylist : nil }, set: { app.addToPlaylist = $0 })) { video in
+            AddToPlaylistSheet(video: video)
+                .presentationDetents([.medium, .large])
+        }
         .sheet(isPresented: $showComments) {
             if let token = app.watch?.commentsToken {
-                CommentsView(token: token, count: app.watch?.commentsCount)
+                CommentsView(token: token, count: app.watch?.commentsCount, videoId: app.watch?.videoId ?? "")
                     .presentationDetents([.medium, .large])
                     .presentationDragIndicator(.visible)
             }
@@ -119,7 +131,7 @@ struct WatchView: View {
                     if let w = app.watch {
                         info(w)
                         if let q = app.queue { queueSection(q) }
-                        if !settings.hideRelated, !w.related.isEmpty { upNext(w) }
+                        if !settings.hideRelated, !relatedShown(w).isEmpty { upNext(w) }
                     } else if let error = app.watchError {
                         ContentUnavailableView(error.contains("isn't available") ? "Video Unavailable" : "Couldn't Load Details",
                                            systemImage: "exclamationmark.triangle", description: Text(error))
@@ -219,12 +231,19 @@ struct WatchView: View {
                     .accessibilityAddTraits(w.likeStatus == .liked ? .isSelected : [])
                     Divider().frame(height: 20)
                     Button { app.rate(.disliked) } label: {
-                        Image(systemName: w.likeStatus == .disliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                            .padding(.horizontal, 14)
-                            .frame(maxHeight: .infinity)
-                            .contentShape(Rectangle())
+                        Group {
+                            if let d = w.dislikes, settings.returnDislike {
+                                Label(d.formatted(.number.notation(.compactName)), systemImage: w.likeStatus == .disliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                            } else {
+                                Image(systemName: w.likeStatus == .disliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
+                            }
+                        }
+                        .padding(.horizontal, 14)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
                     }
                     .accessibilityLabel("Dislike")
+                    .accessibilityValue(w.dislikes.map { "\($0) dislikes" } ?? "")
                     .accessibilityAddTraits(w.likeStatus == .disliked ? .isSelected : [])
                 }
                 .frame(height: 40)
@@ -235,8 +254,12 @@ struct WatchView: View {
                     ShareLink(item: v.shareURL) { Label("Share", systemImage: "arrowshape.turn.up.right").pill() }
                     let saved = app.watchLater.contains(v.id)
                     Button { app.toggleWatchLater(v) } label: {
-                        Label(saved ? "Saved" : "Save", systemImage: saved ? "clock.fill" : "clock").pill()
+                        Label(saved ? "Saved" : "Watch Later", systemImage: saved ? "clock.fill" : "clock").pill()
                     }
+                    Button { app.showAddToPlaylist(v) } label: {
+                        Label("Save", systemImage: "text.badge.plus").pill()
+                    }
+                    .accessibilityLabel("Save to Playlist")
                 }
                 Button { app.player.togglePiP() } label: { Label("PiP", systemImage: "pip.enter").pill() }
                     .accessibilityLabel("Picture in Picture")
@@ -337,7 +360,7 @@ struct WatchView: View {
                 .sensoryFeedback(.selection, trigger: settings.autoplayNext)
             }
             LazyVStack(alignment: .leading, spacing: 14) {
-                ForEach(w.related) { v in
+                ForEach(relatedShown(w)) { v in
                     VideoRow(video: v).onAppear {
                         if v.id == w.related.last?.id { Task { await app.loadMoreRelated() } }
                     }
@@ -346,6 +369,10 @@ struct WatchView: View {
         }
         .padding(.horizontal, 16)
         .padding(.top, 22)
+    }
+
+    private func relatedShown(_ w: WatchDetails) -> [VideoItem] {
+        w.related.filter { library.allows(.video($0), hideWatched: settings.hideWatched) }
     }
 
     private func shortViews(_ v: String) -> String {
@@ -502,6 +529,8 @@ func linkified(_ text: String, links: [TextLink] = []) -> AttributedString {
 
 struct CommentCell: View {
     let comment: Comment
+    /// Likes / un-likes; nil when not signed in.
+    var onLike: (() -> Void)?
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -518,14 +547,29 @@ struct CommentCell: View {
                     }
                 }
                 Text(linkified(comment.text)).font(.subheadline).textSelection(.enabled)
-                if let l = comment.likes, !l.isEmpty {
-                    Label(l, systemImage: "hand.thumbsup").font(.caption).foregroundStyle(.secondary)
-                        .accessibilityLabel("\(l) likes")
+                HStack(spacing: 18) {
+                    if let onLike {
+                        Button(action: onLike) {
+                            Label(comment.likes?.isEmpty == false ? comment.likes! : "Like",
+                                  systemImage: comment.isLiked ? "hand.thumbsup.fill" : "hand.thumbsup")
+                                .frame(minHeight: 30)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(comment.isLiked ? Color.accentColor : .secondary)
+                        .accessibilityLabel(comment.isLiked ? "Remove like" : "Like")
+                        .accessibilityValue(comment.likes.map { "\($0) likes" } ?? "")
+                    } else if let l = comment.likes, !l.isEmpty {
+                        Label(l, systemImage: "hand.thumbsup").foregroundStyle(.secondary)
+                            .accessibilityLabel("\(l) likes")
+                    }
                 }
+                .font(.caption)
+                .contentTransition(.symbolEffect(.replace))
             }
         }
         .padding(.vertical, 4)
-        .accessibilityElement(children: .combine)
+        .accessibilityElement(children: onLike == nil ? .combine : .contain)
     }
 }
 
@@ -535,11 +579,59 @@ final class CommentsModel: ObservableObject {
     @Published private(set) var comments: [Comment] = []
     @Published private(set) var loading = false
     @Published private(set) var error: String?
+    /// Parameters for posting at this level (a new comment, or a reply to `replyParams`).
+    @Published private(set) var createParams: String?
+    @Published private(set) var posting = false
     private var next: String?
     private var started = false
     private let token: String
+    private let isReplies: Bool
 
-    init(token: String) { self.token = token }
+    init(token: String, createParams: String? = nil, isReplies: Bool = false) {
+        self.token = token
+        self.createParams = createParams
+        self.isReplies = isReplies
+    }
+
+    func toggleLike(_ c: Comment) async -> Bool {
+        guard let i = comments.firstIndex(of: c), let token = c.isLiked ? c.unlikeAction : c.likeAction else { return false }
+        let liked = !c.isLiked
+        comments[i].isLiked = liked
+        comments[i].likes = Self.adjust(c.likes, by: liked ? 1 : -1)
+        do {
+            try await InnerTube.shared.performCommentAction(token)
+            return true
+        } catch {
+            if let j = comments.firstIndex(where: { $0.id == c.id }) { comments[j].isLiked = c.isLiked; comments[j].likes = c.likes }
+            return false
+        }
+    }
+
+    /// "12" -> "13"; compact counts like "1.2K" are left alone.
+    private static func adjust(_ likes: String?, by delta: Int) -> String? {
+        let n = Int(likes ?? "0") ?? -1
+        guard n >= 0 else { return likes }
+        let v = max(0, n + delta)
+        return v == 0 ? nil : String(v)
+    }
+
+    /// Posts a comment (or reply) and shows it at the top. Returns false on failure.
+    func post(_ text: String, author: Account?) async -> Bool {
+        guard let params = createParams, !posting else { return false }
+        posting = true
+        defer { posting = false }
+        do {
+            let json = isReplies ? try await InnerTube.shared.createReply(text, params: params)
+                                 : try await InnerTube.shared.createComment(text, params: params)
+            let posted = Parser.comments(json).comments.first
+                ?? Comment(id: UUID().uuidString, author: author?.handle ?? author?.name ?? "You", avatar: author?.avatar,
+                           text: text, likes: nil, published: "Just now", replies: 0, isPinned: false, isOwner: false)
+            comments.insert(posted, at: 0)
+            return true
+        } catch {
+            return false
+        }
+    }
 
     func load() async {
         guard !loading else { return }
@@ -551,6 +643,7 @@ final class CommentsModel: ObservableObject {
         do {
             let json = try await InnerTube.shared.continuation("next", token: t)
             let page = Parser.comments(json)
+            if !isReplies, createParams == nil { createParams = Parser.createCommentParams(json) }
             let existing = Set(comments.map(\.id))
             comments += page.comments.filter { !existing.contains($0.id) }
             next = page.continuation == t ? nil : page.continuation
@@ -566,15 +659,17 @@ struct CommentsView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CommentsModel
 
-    init(token: String, count: String?) {
+    init(token: String, count: String?, videoId: String) {
         self.token = token
         self.count = count
-        _model = StateObject(wrappedValue: CommentsModel(token: token))
+        // Fallback when the page doesn't include posting parameters.
+        _model = StateObject(wrappedValue: CommentsModel(token: token, createParams: videoId.isEmpty ? nil : InnerTube.commentParams(videoId: videoId)))
     }
 
     var body: some View {
         NavigationStack {
             CommentList(model: model)
+                .safeAreaInset(edge: .bottom) { CommentComposer(model: model, placeholder: "Add a comment…") }
                 .navigationTitle(count.map { "Comments · \($0)" } ?? "Comments")
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: Comment.self) { parent in
@@ -590,6 +685,7 @@ struct CommentsView: View {
 }
 
 private struct CommentList: View {
+    @EnvironmentObject private var app: AppModel
     @ObservedObject var model: CommentsModel
     var header: Comment?
 
@@ -601,7 +697,12 @@ private struct CommentList: View {
             }
             ForEach(model.comments) { c in
                 VStack(alignment: .leading, spacing: 6) {
-                    CommentCell(comment: c)
+                    CommentCell(comment: c, onLike: app.signedIn && (c.likeAction != nil || c.unlikeAction != nil) ? {
+                        app.haptic()
+                        Task {
+                            if !(await model.toggleLike(c)) { app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't like the comment")) }
+                        }
+                    } : nil)
                     if c.replies > 0 || c.repliesToken != nil, c.repliesToken != nil, header == nil {
                         NavigationLink(value: c) {
                             Text(c.replies > 0 ? "\(c.replies) replies" : "View replies")
@@ -629,12 +730,65 @@ private struct RepliesView: View {
 
     init(parent: Comment) {
         self.parent = parent
-        _model = StateObject(wrappedValue: CommentsModel(token: parent.repliesToken ?? ""))
+        _model = StateObject(wrappedValue: CommentsModel(token: parent.repliesToken ?? "", createParams: parent.replyParams, isReplies: true))
     }
 
     var body: some View {
         CommentList(model: model, header: parent)
+            .safeAreaInset(edge: .bottom) { CommentComposer(model: model, placeholder: "Reply to \(parent.author)…") }
             .navigationTitle("Replies")
             .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+/// Text field at the bottom of the comments for posting (signed in only).
+private struct CommentComposer: View {
+    @EnvironmentObject private var app: AppModel
+    @ObservedObject var model: CommentsModel
+    let placeholder: String
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        if app.signedIn, model.createParams != nil {
+            HStack(alignment: .bottom, spacing: 10) {
+                Avatar(url: app.account?.avatar, size: 32)
+                TextField(placeholder, text: $text, axis: .vertical)
+                    .lineLimit(1...5)
+                    .focused($focused)
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button(action: send) {
+                        Group {
+                            if model.posting { ProgressView() } else { Image(systemName: "arrow.up").fontWeight(.bold) }
+                        }
+                        .frame(width: 38, height: 38)
+                    }
+                    .buttonStyle(.glassProminent)
+                    .buttonBorderShape(.circle)
+                    .disabled(model.posting)
+                    .accessibilityLabel("Post")
+                    .transition(.scale.combined(with: .opacity))
+                }
+            }
+            .animation(.snappy, value: text.isEmpty)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    private func send() {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { return }
+        Task {
+            if await model.post(t, author: app.account) {
+                text = ""
+                focused = false
+                app.successHaptic()
+            } else {
+                app.show(Toast(icon: "exclamationmark.triangle", text: "Couldn't post your comment"))
+            }
+        }
     }
 }

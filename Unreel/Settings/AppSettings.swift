@@ -103,6 +103,17 @@ final class AppSettings: ObservableObject {
     @Published var keepScreenOn: Bool { didSet { d.set(keepScreenOn, forKey: "keepScreenOn") } }
     @Published var lockScreenControls: Bool { didSet { d.set(lockScreenControls, forKey: "lockScreenControls") } }
 
+    @Published var resumePlayback: Bool { didSet { d.set(resumePlayback, forKey: "resumePlayback") } }
+    @Published var rememberChannelSpeed: Bool { didSet { d.set(rememberChannelSpeed, forKey: "rememberChannelSpeed") } }
+
+    // Feed control
+    @Published var hideWatched: Bool { didSet { d.set(hideWatched, forKey: "hideWatched") } }
+
+    // Community data
+    @Published var returnDislike: Bool { didSet { d.set(returnDislike, forKey: "returnDislike") } }
+    @Published var deArrowTitles: Bool { didSet { d.set(deArrowTitles, forKey: "deArrowTitles") } }
+    @Published var deArrowThumbnails: Bool { didSet { d.set(deArrowThumbnails, forKey: "deArrowThumbnails") } }
+
     // SponsorBlock
     @Published var sponsorBlock: Bool { didSet { d.set(sponsorBlock, forKey: "sponsorBlock") } }
     @Published var sponsorCategories: Set<String> { didSet { d.set(Array(sponsorCategories), forKey: "sponsorCategories") } }
@@ -146,6 +157,12 @@ final class AppSettings: ObservableObject {
         autoplayNext = bool("autoplayNext", true)
         keepScreenOn = bool("keepScreenOn", true)
         lockScreenControls = bool("lockScreenControls", true)
+        resumePlayback = bool("resumePlayback", true)
+        rememberChannelSpeed = bool("rememberChannelSpeed", true)
+        hideWatched = bool("hideWatched", false)
+        returnDislike = bool("returnDislike", true)
+        deArrowTitles = bool("deArrowTitles", false)
+        deArrowThumbnails = bool("deArrowThumbnails", false)
         sponsorBlock = bool("sponsorBlock", true)
         sponsorCategories = Set(d.stringArray(forKey: "sponsorCategories") ?? SponsorCategory.all.filter(\.defaultOn).map(\.id))
         sponsorNotice = bool("sponsorNotice", true)
@@ -207,6 +224,9 @@ final class AppSettings: ObservableObject {
         backgroundPlay = fresh.backgroundPlay; autoPiP = fresh.autoPiP; defaultSpeed = fresh.defaultSpeed
         quality = fresh.quality; autoplayNext = fresh.autoplayNext; keepScreenOn = fresh.keepScreenOn
         lockScreenControls = fresh.lockScreenControls
+        resumePlayback = fresh.resumePlayback; rememberChannelSpeed = fresh.rememberChannelSpeed
+        hideWatched = fresh.hideWatched; returnDislike = fresh.returnDislike
+        deArrowTitles = fresh.deArrowTitles; deArrowThumbnails = fresh.deArrowThumbnails
         sponsorBlock = fresh.sponsorBlock; sponsorCategories = fresh.sponsorCategories; sponsorNotice = fresh.sponsorNotice
         theme = fresh.theme; startPage = fresh.startPage; desktopSite = fresh.desktopSite; pageZoom = fresh.pageZoom
         pullToRefresh = fresh.pullToRefresh; swipeNavigation = fresh.swipeNavigation; externalLinks = fresh.externalLinks

@@ -24,7 +24,7 @@ struct VideoItem: Identifiable, Hashable, Codable {
     }
 }
 
-struct ChannelItem: Identifiable, Hashable {
+struct ChannelItem: Identifiable, Hashable, Codable {
     let id: String
     var name: String
     var avatar: URL?
@@ -72,6 +72,8 @@ struct WatchDetails {
     var commentsCount: String?
     var commentPreview: String?
     var likeStatus: LikeStatus = .none
+    /// Dislike count from Return YouTube Dislike (YouTube no longer shows it).
+    var dislikes: Int?
     var subscribed: Bool?
     /// Real targets for the (shortened) links and timestamps in the description.
     var descriptionLinks: [TextLink] = []
@@ -104,6 +106,11 @@ enum LikeStatus { case none, liked, disliked }
 
 struct Comment: Identifiable, Hashable {
     let id: String
+    /// Tokens for liking / un-liking (only present when signed in).
+    var likeAction: String?
+    var unlikeAction: String?
+    var isLiked = false
+    var replyParams: String?
     var author: String
     var avatar: URL?
     var text: String
@@ -150,4 +157,7 @@ enum Route: Hashable {
     case playlist(String, String)    // id, title
     case browse(String, String)      // browseId, title (history, watch later, …)
     case settings
+    case feedControl
+    case localHistory
+    case localChannels
 }

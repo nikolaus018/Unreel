@@ -80,6 +80,88 @@ actor InnerTube {
         _ = try await post("browse/edit_playlist", ["playlistId": "WL", "actions": [action]])
     }
 
+    // MARK: Playlists
+
+    struct PlaylistChoice: Identifiable, Hashable {
+        let id: String
+        var title: String
+        var contains: Bool
+        var privacy: String?
+    }
+
+    /// The signed-in user's playlists, marked with whether they already hold the video.
+    func playlistsForAdding(_ videoId: String) async throws -> [PlaylistChoice] {
+        func parse(_ json: J) -> [PlaylistChoice] {
+            var out: [PlaylistChoice] = []
+            for r in json.all("playlistAddToOptionRenderer") {
+                guard let id = r["playlistId"].string else { continue }
+                out.append(PlaylistChoice(id: id, title: r["title"].text ?? id,
+                                          contains: r["containsSelectedVideos"].string == "ALL",
+                                          privacy: r["privacy"].string))
+            }
+            return out
+        }
+        let body: [String: Any] = ["videoIds": [videoId], "excludeWatchLater": true]
+        let mweb = parse(try await post("playlist/get_add_to_playlist", body))
+        if !mweb.isEmpty { return mweb }
+        return parse(try await post("playlist/get_add_to_playlist", body, client: .web))
+    }
+
+    func setInPlaylist(_ playlistId: String, videoId: String, _ added: Bool) async throws {
+        let action: [String: Any] = added
+            ? ["action": "ACTION_ADD_VIDEO", "addedVideoId": videoId]
+            : ["action": "ACTION_REMOVE_VIDEO_BY_VIDEO_ID", "removedVideoId": videoId]
+        let json = try await post("browse/edit_playlist", ["playlistId": playlistId, "actions": [action]])
+        if let status = json["status"].string, status != "STATUS_SUCCEEDED" { throw APIError.message("YouTube didn't accept the change.") }
+    }
+
+    enum Privacy: String, CaseIterable, Identifiable {
+        case PRIVATE, UNLISTED, PUBLIC
+        var id: String { rawValue }
+        var title: String { rawValue.capitalized }
+    }
+
+    /// Creates a playlist, optionally with a first video. Returns its ID.
+    @discardableResult
+    func createPlaylist(title: String, privacy: Privacy, videoId: String?) async throws -> String? {
+        var body: [String: Any] = ["title": title, "privacyStatus": privacy.rawValue]
+        if let videoId { body["videoIds"] = [videoId] }
+        let json = try await post("playlist/create", body)
+        return json["playlistId"].string ?? json.first("playlistId").string
+    }
+
+    func renamePlaylist(_ playlistId: String, title: String) async throws {
+        _ = try await post("browse/edit_playlist", ["playlistId": playlistId,
+                                                    "actions": [["action": "ACTION_SET_PLAYLIST_NAME", "playlistName": title]]])
+    }
+
+    func deletePlaylist(_ playlistId: String) async throws {
+        _ = try await post("playlist/delete", ["playlistId": playlistId])
+    }
+
+    // MARK: Comments
+
+    func performCommentAction(_ token: String) async throws {
+        _ = try await post("comment/perform_comment_action", ["actions": [token]])
+    }
+
+    /// Posts a comment; returns the new comment when YouTube sends it back.
+    func createComment(_ text: String, params: String) async throws -> J {
+        try await post("comment/create_comment", ["commentText": text, "createCommentParams": params])
+    }
+
+    func createReply(_ text: String, params: String) async throws -> J {
+        try await post("comment/create_comment_reply", ["commentText": text, "createReplyParams": params])
+    }
+
+    /// `createCommentParams` for a video, as YouTube's clients build it (protobuf: field 2 = video ID,
+    /// field 5 = {1: 0}, field 10 = 1), for when the comments page doesn't include one.
+    static func commentParams(videoId: String) -> String {
+        var bytes: [UInt8] = [0x12, UInt8(videoId.utf8.count)] + Array(videoId.utf8)
+        bytes += [0x2A, 0x02, 0x08, 0x00, 0x50, 0x01]
+        return Data(bytes).base64EncodedString()
+    }
+
     func accountMenu() async throws -> J {
         do {
             return try await post("account/account_menu", [:])

@@ -5,6 +5,7 @@ import WebKit
 struct RootView: View {
     @EnvironmentObject private var app: AppModel
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var library: LocalLibrary
     @ObservedObject var player: PlayerController
     @Namespace private var transition
     @State private var showOnboarding = false
@@ -12,10 +13,10 @@ struct RootView: View {
     var body: some View {
         TabView(selection: $app.tab) {
             Tab("Home", systemImage: "house", value: RootTab.home) {
-                NavigationStack(path: $app.homePath) { HomeView(settings: settings).routes() }
+                NavigationStack(path: $app.homePath) { HomeView(settings: settings, library: library).routes() }
             }
             Tab("Subscriptions", systemImage: "play.square.stack", value: RootTab.subscriptions) {
-                NavigationStack(path: $app.subscriptionsPath) { SubscriptionsView(settings: settings).routes() }
+                NavigationStack(path: $app.subscriptionsPath) { SubscriptionsView(settings: settings, library: library).routes() }
             }
             Tab("You", systemImage: "person.crop.circle", value: RootTab.you) {
                 NavigationStack(path: $app.youPath) { YouView().routes() }
@@ -42,8 +43,13 @@ struct RootView: View {
         .sheet(isPresented: $app.showSignIn) {
             SignInView()
         }
+        .sheet(item: Binding(get: { app.showPlayer ? nil : app.addToPlaylist }, set: { app.addToPlaylist = $0 })) { video in
+            AddToPlaylistSheet(video: video)
+                .presentationDetents([.medium, .large])
+        }
         .overlay(alignment: .bottom) {
-            if let toast = app.toast {
+            // While the player is open it shows toasts itself (it covers this view).
+            if let toast = app.toast, !app.showPlayer {
                 ToastView(toast: toast) { app.toast = nil }
                     .padding(.bottom, player.current != nil ? 150 : 96)
                     .transition(.move(edge: .bottom).combined(with: .opacity))
@@ -67,6 +73,9 @@ private struct RouteDestinations: ViewModifier {
             case .playlist(let id, let title): PlaylistView(id: id, title: title, settings: settings)
             case .browse(let id, let title): BrowseView(browseId: id, title: title, settings: settings)
             case .settings: SettingsView()
+            case .feedControl: FeedControlView()
+            case .localHistory: LocalHistoryView()
+            case .localChannels: LocalChannelsView()
             }
         }
     }

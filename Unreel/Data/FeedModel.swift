@@ -6,10 +6,12 @@ final class FeedModel: ObservableObject {
     enum Source: Equatable {
         case browse(String, params: String? = nil)
         case search(String, params: String? = nil)
+        /// Built on the device (local subscriptions feed); loaded with `loader`.
+        case local(String)
 
         var endpoint: String {
             switch self {
-            case .browse: "browse"
+            case .browse, .local: "browse"
             case .search: "search"
             }
         }
@@ -27,6 +29,8 @@ final class FeedModel: ObservableObject {
     private var client: InnerTube.Client = .mweb
     private let hideShorts: () -> Bool
     private let filter: ((FeedItem) -> Bool)?
+    /// Loads a `.local` source.
+    var loader: (() async throws -> [FeedItem])?
     /// Raw response of the first page, for screens that read more than the items (headers).
     private(set) var firstPage: J?
     /// Bumped whenever the source changes, so answers for an older source are thrown away.
@@ -104,11 +108,17 @@ final class FeedModel: ObservableObject {
             case .search(let q, let params):
                 json = try await InnerTube.shared.search(q, params: params)
                 page = Parser.feed(json, hideShorts: hideShorts())
+            case .local:
+                json = J(nil)
+                page = FeedPage(items: try await loader?() ?? [])
             }
             guard gen == generation else { return }
             let newItems = apply(page.items)
             // An empty answer on a refresh is almost always a hiccup: keep what is shown.
-            if newItems.isEmpty && !items.isEmpty { return }
+            // (A local feed can legitimately become empty, e.g. after unsubscribing from everything.)
+            var isLocal = false
+            if case .local = source { isLocal = true }
+            if newItems.isEmpty && !items.isEmpty && !isLocal { return }
             firstPage = json
             items = newItems
             continuation = page.continuation
@@ -132,9 +142,19 @@ final class FeedModel: ObservableObject {
         continuation = page.continuation == token ? nil : page.continuation
     }
 
-    /// Triggers paging when one of the last few items appears.
-    func itemAppeared(_ item: FeedItem) {
-        guard let index = items.firstIndex(of: item), index >= items.count - 5 else { return }
+    /// Triggers paging when one of the last few shown items appears (some may be filtered out).
+    func itemAppeared(_ item: FeedItem, in shown: [FeedItem]) {
+        guard let index = shown.firstIndex(of: item), index >= shown.count - 5 else { return }
         Task { await loadMore() }
+    }
+
+    /// Removes a video right away (after removing it from a playlist).
+    func remove(_ videoId: String) {
+        items.removeAll { if case .video(let v) = $0 { v.id == videoId } else { false } }
+    }
+
+    /// Clears a local feed so the next load starts fresh (e.g. after subscribing).
+    func invalidate() {
+        loadedOnce = false
     }
 }

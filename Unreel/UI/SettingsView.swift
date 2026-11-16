@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var filters: FilterListManager
     @EnvironmentObject private var app: AppModel
+    @EnvironmentObject private var library: LocalLibrary
     @State private var confirmReset = false
     @State private var confirmClearCache = false
 
@@ -21,6 +22,9 @@ struct SettingsView: View {
                 .disabled(!settings.adBlocking)
                 Toggle(isOn: $settings.hideShorts) {
                     SettingLabel("Hide Shorts", icon: "rectangle.slash", color: .pink)
+                }
+                NavigationLink(value: Route.feedControl) {
+                    SettingLabel("Feed Control", icon: "line.3.horizontal.decrease", color: .blue, detail: feedControlSummary)
                 }
             } header: {
                 Text("Content")
@@ -64,6 +68,13 @@ struct SettingsView: View {
                 Toggle(isOn: $settings.autoplayNext) {
                     SettingLabel("Autoplay", icon: "play.circle", color: .red)
                 }
+                Toggle(isOn: $settings.resumePlayback) {
+                    SettingLabel("Resume Where You Left Off", icon: "clock.arrow.circlepath", color: .green)
+                }
+                Toggle(isOn: $settings.rememberChannelSpeed) {
+                    SettingLabel("Remember Speed per Channel", icon: "gauge.with.needle", color: .orange,
+                                 detail: library.channelSpeeds.isEmpty ? nil : "\(library.channelSpeeds.count)")
+                }
                 Toggle(isOn: $settings.backgroundPlay) {
                     SettingLabel("Background Playback", icon: "headphones", color: .indigo)
                 }
@@ -79,7 +90,23 @@ struct SettingsView: View {
             } header: {
                 Text("Playback")
             } footer: {
-                Text("When you leave the app while a video plays, Picture in Picture is started if iOS allows it; the sound keeps playing either way. Notification Center and Control Center never interrupt the video. Keep Screen On only applies while a video is playing.")
+                Text("A speed you pick in the player's menu is used again for that channel's videos. When you leave the app while a video plays, Picture in Picture is started if iOS allows it; the sound keeps playing either way. Keep Screen On only applies while a video is playing.")
+            }
+
+            Section {
+                Toggle(isOn: $settings.returnDislike) {
+                    SettingLabel("Show Dislikes", icon: "hand.thumbsdown", color: .gray)
+                }
+                Toggle(isOn: $settings.deArrowTitles) {
+                    SettingLabel("Better Titles (DeArrow)", icon: "textformat", color: .teal)
+                }
+                Toggle(isOn: $settings.deArrowThumbnails) {
+                    SettingLabel("Better Thumbnails (DeArrow)", icon: "photo", color: .teal)
+                }
+            } header: {
+                Text("Community")
+            } footer: {
+                Text("Dislike counts come from Return YouTube Dislike (estimated from its users). DeArrow replaces clickbait titles and thumbnails with ones written by its community; videos without a submission keep the original. Only a short hash prefix of each video ID is sent to DeArrow.")
             }
 
             Section("Watch Page") {
@@ -151,6 +178,11 @@ struct SettingsView: View {
             Text("Thumbnails and pages are downloaded again as you browse.")
         }
         .onDisappear { app.player.applyPendingReload() }
+    }
+
+    private var feedControlSummary: String {
+        let n = library.blockedChannels.count + library.blockedKeywords.count
+        return n > 0 ? "\(n) blocked" : (settings.hideWatched ? "Hiding watched" : "")
     }
 
     private var filterSummary: String {

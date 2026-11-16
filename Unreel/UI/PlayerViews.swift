@@ -623,6 +623,12 @@ struct PlayerControls: View {
                         .accessibilityLabel("Chapter: \(ch.title)")
                 }
                 Spacer(minLength: 8)
+                if state.sleepDeadline != nil || state.sleepAtEnd {
+                    Image(systemName: "moon.zzz.fill").font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6).padding(.vertical, 3)
+                        .background(.white.opacity(0.2), in: Capsule())
+                        .accessibilityLabel("Sleep timer on")
+                }
                 if state.rate != 1 {
                     Text(rateLabel(state.rate)).font(.caption2.weight(.bold))
                         .accessibilityLabel("Speed \(rateLabel(state.rate))")
@@ -769,41 +775,33 @@ struct PlayerOptionsSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     private let speeds: [Double] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+    private static let sleepMinutes: [Int] = [15, 30, 45, 60, 90]
 
     var body: some View {
         NavigationStack {
             List {
-                Section("Captions") {
-                    row("Off", selected: state.captionTrack == nil) { player.setCaptions(nil) }
-                    if state.captionTracks.isEmpty {
-                        Text("This video has no captions").foregroundStyle(.secondary)
-                    }
-                    ForEach(state.captionTracks) { t in
-                        row(t.name, selected: state.captionTrack == t) { player.setCaptions(t) }
-                    }
-                }
                 Section("Speed") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(speeds, id: \.self) { r in
-                                let selected = abs(state.rate - r) < 0.01
-                                Button {
-                                    player.setRate(r)
-                                    UISelectionFeedbackGenerator().selectionChanged()
-                                } label: {
-                                    Text(r == 1 ? "1×" : String(format: "%g×", r))
-                                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                                        .frame(minWidth: 52, minHeight: 44)
-                                        .foregroundStyle(selected ? Color.white : Color.primary)
-                                        .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
-                                        .contentShape(Capsule())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(r == 1 ? "Normal speed" : String(format: "%g times speed", r))
-                                .accessibilityAddTraits(selected ? .isSelected : [])
-                            }
-                        }
-                        .padding(.vertical, 4)
+                    chips(speeds.map { r in
+                        Chip(id: "\(r)", title: r == 1 ? "1×" : String(format: "%g×", r), selected: abs(state.rate - r) < 0.01,
+                             label: r == 1 ? "Normal speed" : String(format: "%g times speed", r)) { player.chooseRate(r) }
+                    })
+                }
+
+                Section {
+                    chips([Chip(id: "off", title: "Off", selected: state.sleepDeadline == nil && !state.sleepAtEnd, label: "Sleep timer off") {
+                        player.setSleepTimer(minutes: nil, off: true)
+                    }] + Self.sleepMinutes.map { m in
+                        Chip(id: "\(m)", title: "\(m) min", selected: state.sleepDeadline != nil && state.sleepMinutes == m, label: "\(m) minutes") { player.setSleepTimer(minutes: m) }
+                    } + [Chip(id: "end", title: "End of Video", selected: state.sleepAtEnd, label: "At the end of the video") {
+                        player.setSleepTimer(minutes: nil)
+                    }])
+                } header: {
+                    Text("Sleep Timer")
+                } footer: {
+                    if let d = state.sleepDeadline {
+                        Text("Pauses in \(Text(timerInterval: Date()...d, countsDown: true)) (at \(d.formatted(date: .omitted, time: .shortened))).")
+                    } else if state.sleepAtEnd {
+                        Text("Pauses when this video ends.")
                     }
                 }
 
@@ -820,6 +818,15 @@ struct PlayerOptionsSheet: View {
                     }
                 }
 
+                Section("Captions") {
+                    row("Off", selected: state.captionTrack == nil) { player.setCaptions(nil) }
+                    if state.captionTracks.isEmpty {
+                        Text("This video has no captions").foregroundStyle(.secondary)
+                    }
+                    ForEach(state.captionTracks) { t in
+                        row(t.name, selected: state.captionTrack == t) { player.setCaptions(t) }
+                    }
+                }
             }
             .tint(.primary)
             .navigationTitle("Playback")
@@ -827,6 +834,39 @@ struct PlayerOptionsSheet: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.fontWeight(.semibold) }
             }
+        }
+    }
+
+    private struct Chip: Identifiable {
+        let id: String
+        let title: String
+        let selected: Bool
+        let label: String
+        let action: () -> Void
+    }
+
+    private func chips(_ items: [Chip]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                ForEach(items) { c in
+                    Button {
+                        c.action()
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } label: {
+                        Text(c.title)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .padding(.horizontal, 12)
+                            .frame(minWidth: 52, minHeight: 44)
+                            .foregroundStyle(c.selected ? Color.white : Color.primary)
+                            .background(c.selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(c.label)
+                    .accessibilityAddTraits(c.selected ? .isSelected : [])
+                }
+            }
+            .padding(.vertical, 4)
         }
     }
 
