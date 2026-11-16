@@ -136,13 +136,6 @@ final class PlayerController: NSObject, ObservableObject {
     /// Video surfaces currently in the view hierarchy, newest last.
     private var surfaces: [(view: UIView, role: SurfaceRole)] = []
 
-    /// Whether the watch screen is (or is about to be) shown. Set as soon as it opens or closes,
-    /// so the video moves before the screen animates away and never leaves the window (which
-    /// makes WebKit pause it for a moment).
-    var watchVisible = false {
-        didSet { if watchVisible != oldValue { placeBest() } }
-    }
-
     /// Registers a surface and moves the video to the best one.
     func attach(to container: UIView, role: SurfaceRole) {
         surfaces.removeAll { $0.view === container }
@@ -156,16 +149,14 @@ final class PlayerController: NSObject, ObservableObject {
         if webView.superview === container { placeBest() }
     }
 
-    /// The watch screen when it's open, otherwise the mini player; if the preferred one isn't
-    /// there yet, the video stays on the surface it's on.
+    /// The watch screen while it exists (also during its closing animation, so the video stays
+    /// visible there), otherwise the mini player, otherwise parking. Moves happen synchronously
+    /// from one on-screen view to another, so WebKit never sees the video leave the window
+    /// (which pauses it for a moment).
     private func placeBest() {
-        let preferred: SurfaceRole = watchVisible ? .watch : .mini
-        if let target = surfaces.last(where: { $0.role == preferred }) {
+        let target = surfaces.last(where: { $0.role == .watch }) ?? surfaces.last
+        if let target {
             place(in: target.view, scaled: target.role == .mini)
-        } else if let current = surfaces.first(where: { $0.view === webView.superview }) {
-            place(in: current.view, scaled: current.role == .mini)
-        } else if let any = surfaces.last {
-            place(in: any.view, scaled: any.role == .mini)
         } else {
             park()
         }
@@ -390,14 +381,19 @@ final class PlayerController: NSObject, ObservableObject {
         }
     }
 
-    /// Leaves Picture in Picture if it is on (no-op otherwise).
-    func exitPiP() {
+    /// Quietly asks for Picture in Picture (no "unavailable" notice if iOS refuses).
+    private func enterPiPIfPossible() {
         webView.callAsyncJavaScript("""
         const v = document.querySelector('#movie_player video') || document.querySelector('video');
-        if (document.pictureInPictureElement) { await document.exitPictureInPicture(); return 'exited'; }
-        if (v && v.webkitPresentationMode === 'picture-in-picture') { v.webkitSetPresentationMode('inline'); return 'inline'; }
-        return 'none';
-        """, arguments: [:], in: nil, in: .page) { _ in }
+        if (!v || v.paused || document.pictureInPictureElement) return 'skip';
+        v.removeAttribute('disablepictureinpicture'); v.disablePictureInPicture = false;
+        if (v.webkitSupportsPresentationMode && v.webkitSupportsPresentationMode('picture-in-picture')) {
+          v.webkitSetPresentationMode('picture-in-picture'); return 'webkit';
+        }
+        try { await v.requestPictureInPicture(); return 'entered'; } catch (e) { return 'failed'; }
+        """, arguments: [:], in: nil, in: .page) { [weak self] result in
+            self?.log.notice("auto PiP: \(String(describing: result), privacy: .public)")
+        }
     }
 
     // MARK: Captions
@@ -516,33 +512,22 @@ final class PlayerController: NSObject, ObservableObject {
     private var remotePausedWhileInactive = false
     private var isActive = true
     private var enteredBackground = false
-    /// PiP the app started on its own when the scene went inactive.
-    private var autoStartedPiP = false
 
-    /// Inactive also happens for Notification Center, Control Center and the app switcher.
-    /// Automatic PiP has to start now (iOS won't start it once the app is in the background);
-    /// if the app turns out not to leave, `sceneDidBecomeActive` undoes it.
+    /// Inactive also happens for Notification Center, Control Center and the app switcher, where
+    /// the video should just keep playing, so nothing changes here.
     func sceneWillResignActive() {
         isActive = false
         enteredBackground = false
         wasPlayingBeforeBackground = state.playing
         remotePausedWhileInactive = false
-        autoStartedPiP = false
-        if state.playing, settings.autoPiP, !state.pip {
-            autoStartedPiP = true
-            togglePiP()
-        }
     }
 
     /// Back from Notification Center, Control Center or a peek at the app switcher (the app never
     /// left the screen): if something paused the video meanwhile (not the user), carry on.
     func sceneDidBecomeActive() {
         isActive = true
-        defer { wasPlayingBeforeBackground = false; remotePausedWhileInactive = false; enteredBackground = false; autoStartedPiP = false }
-        guard wasPlayingBeforeBackground, !enteredBackground, current != nil else { return }
-        // Notification / Control Center: back to inline, as if nothing happened.
-        if autoStartedPiP { exitPiP() }
-        guard !remotePausedWhileInactive else { return }
+        defer { wasPlayingBeforeBackground = false; remotePausedWhileInactive = false; enteredBackground = false }
+        guard wasPlayingBeforeBackground, !enteredBackground, !remotePausedWhileInactive, current != nil else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
             guard let self, self.current != nil, !self.state.playing, !self.state.ended else { return }
             self.resume()
@@ -551,6 +536,9 @@ final class PlayerController: NSObject, ObservableObject {
 
     func sceneDidEnterBackground() {
         enteredBackground = true
+        // Leaving the app for real. iOS only lets a web player start Picture in Picture while
+        // the app is still on screen, so this is a best effort; background audio continues anyway.
+        if wasPlayingBeforeBackground, !remotePausedWhileInactive, settings.autoPiP, !state.pip { enterPiPIfPossible() }
         guard settings.backgroundPlay, wasPlayingBeforeBackground, !remotePausedWhileInactive else { return }
         try? AVAudioSession.sharedInstance().setActive(true)
         for delay in [0.3, 1.0, 2.0] {

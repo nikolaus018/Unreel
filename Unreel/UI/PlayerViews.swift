@@ -102,8 +102,7 @@ struct PlayerControls: View {
     @State private var lastScrubChapter: Int?
     // Taps: a single tap toggles the controls; double taps seek, and further taps on the same
     // side keep seeking while "seek mode" lasts (like YouTube).
-    @State private var lastTap: (zone: Zone, at: Date)?
-    @State private var pendingTap: Task<Void, Never>?
+    @State private var lastTap: (zone: Zone, at: Date, wasVisible: Bool)?
     @State private var seekZone: Zone?
     @State private var seekAmount = 0
     @State private var seekModeUntil = Date.distantPast
@@ -113,6 +112,7 @@ struct PlayerControls: View {
     @State private var suppressTap = false
     @State private var notice: (text: String, icon: String, id: Int)?
     @State private var width: CGFloat = 1
+    @State private var coverAfterMove = true
     @State private var dragEndedAt = Date.distantPast
     /// True while a finger is down in a recognized drag; resets itself even if the drag is cancelled.
     @GestureState private var dragActive = false
@@ -124,8 +124,9 @@ struct PlayerControls: View {
 
     var body: some View {
         ZStack {
-            // Poster until the video actually starts, so there is never a black box.
-            if !state.hasStarted, let v = player.current {
+            // Poster until the video starts, and for a moment after it moves here (opening the
+            // player, rotating) while WebKit redraws it, so there is never a black box.
+            if !state.hasStarted || coverAfterMove, let v = player.current {
                 Color.clear
                     .overlay { RemoteImage(url: v.thumbnail) }
                     .overlay(Color.black.opacity(0.25))
@@ -249,7 +250,6 @@ struct PlayerControls: View {
                 rateBeforeBoost = state.rate
                 player.setRate(2)
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                pendingTap?.cancel()
                 suppressTap = true
                 visible = false
             } else {
@@ -277,7 +277,12 @@ struct PlayerControls: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .background { keyboardShortcuts }
         .dynamicTypeSize(...DynamicTypeSize.xxLarge)
-        .onAppear { scheduleHide() }
+        .onAppear {
+            scheduleHide()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                withAnimation(.easeOut(duration: 0.3)) { coverAfterMove = false }
+            }
+        }
         .onChange(of: state.playing) { _, playing in if playing { scheduleHide() } else { show() } }
         .onChange(of: voiceOver) { _, on in if on { show() } }
         .sheet(isPresented: $showOptions, onDismiss: { scheduleHide() }) {
@@ -309,32 +314,31 @@ struct PlayerControls: View {
             return
         }
         if let last = lastTap, last.zone == z, now.timeIntervalSince(last.at) < 0.3 {
-            pendingTap?.cancel()
             lastTap = nil
             if z == .center {
+                // Undo the first tap's toggle; the play/pause flash is the feedback.
+                visible = last.wasVisible
                 if state.ended { player.seek(to: 0); player.resume() } else { player.togglePlay() }
                 flash(state.playing ? "pause.fill" : "play.fill")
                 app.haptic()
             } else {
+                // Seeking: the ripple is the feedback, the controls get out of the way.
+                visible = false
                 seek(z)
             }
             return
         }
-        lastTap = (z, now)
-        pendingTap?.cancel()
-        pendingTap = Task {
-            try? await Task.sleep(for: .milliseconds(240))
-            guard !Task.isCancelled else { return }
-            visible.toggle()
-            if visible { scheduleHide() }
-        }
+        // Respond to a single tap right away; a second tap within 0.3 s turns it into a double tap.
+        lastTap = (z, now, visible)
+        visible.toggle()
+        if visible { scheduleHide() }
     }
 
     private func seek(_ z: Zone) {
         if seekZone != z || Date() >= seekModeUntil { seekAmount = 0 }
         seekZone = z
         seekAmount += 10
-        seekModeUntil = Date().addingTimeInterval(0.8)
+        seekModeUntil = Date().addingTimeInterval(0.9)
         player.seek(by: z == .forward ? 10 : -10)
         app.haptic()
         if visible { scheduleHide() }
@@ -366,7 +370,6 @@ struct PlayerControls: View {
             .updating($dragActive) { _, active, _ in active = true }
             .onChanged { g in
                 if dragAxis == nil {
-                    pendingTap?.cancel()
                     // The scrubber's own drag already started (it sets `scrubbing` right away).
                     // In full screen, a swipe from the top edge belongs to iOS (Notification / Control Center).
                     let fromTopEdge = fullscreen && g.startLocation.y < 44
@@ -993,6 +996,7 @@ struct MiniPlayer: View {
     @ObservedObject var player: PlayerController
     @ObservedObject var state: PlaybackState
     @Environment(\.tabViewBottomAccessoryPlacement) private var placement
+    @State private var coverVideo = true
 
     var body: some View {
         HStack(spacing: 12) {
@@ -1001,8 +1005,10 @@ struct MiniPlayer: View {
                     // The video itself keeps playing here; the thumbnail covers it until it starts.
                     ZStack {
                         PlayerSurface(player: player, role: .mini)
-                        if !state.hasStarted { RemoteImage(url: v.smallThumbnail) }
+                        // Covers the moment WebKit needs to redraw the video after it moves here.
+                        if !state.hasStarted || coverVideo { RemoteImage(url: v.smallThumbnail).transition(.opacity) }
                     }
+                    .animation(.easeOut(duration: 0.35), value: coverVideo)
                     .frame(width: 60, height: 34)
                     .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .accessibilityHidden(true)
@@ -1045,6 +1051,13 @@ struct MiniPlayer: View {
         .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onTapGesture { app.showPlayer = true }
+        .task(id: app.showPlayer) {
+            // The video arrives here when the player closes; reveal it once it has redrawn.
+            coverVideo = true
+            guard !app.showPlayer else { return }
+            try? await Task.sleep(for: .milliseconds(450))
+            coverVideo = false
+        }
         // Swipe up to open, swipe left for the next video.
         .gesture(
             DragGesture(minimumDistance: 16)

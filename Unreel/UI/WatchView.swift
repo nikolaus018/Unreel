@@ -187,10 +187,16 @@ struct WatchView: View {
                     .accessibilityHint("Opens the channel")
                     Spacer(minLength: 8)
                     SubscribeButton(subscribed: w.subscribed ?? false) { app.setSubscribed(c, !(w.subscribed ?? false)) }
+                        // Until the real state arrives, show a neutral placeholder instead of a
+                        // "Subscribe" that flips to "Subscribed".
+                        .redacted(reason: w.isPlaceholder ? .placeholder : [])
+                        .disabled(w.isPlaceholder)
                 }
             }
 
             actionBar(w)
+                .redacted(reason: w.isPlaceholder ? .placeholder : [])
+                .disabled(w.isPlaceholder)
 
             if !settings.hideComments, w.commentsToken != nil { commentsCard(w) }
         }

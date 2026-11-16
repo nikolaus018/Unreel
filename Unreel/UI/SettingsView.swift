@@ -79,7 +79,7 @@ struct SettingsView: View {
             } header: {
                 Text("Playback")
             } footer: {
-                Text("Picture in Picture starts when you leave the app while a video plays. Keep Screen On only applies while a video is playing.")
+                Text("When you leave the app while a video plays, Picture in Picture is started if iOS allows it; the sound keeps playing either way. Notification Center and Control Center never interrupt the video. Keep Screen On only applies while a video is playing.")
             }
 
             Section("Watch Page") {

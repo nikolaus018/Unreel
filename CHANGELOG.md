@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.2.2 — 2026-11-16
+
+Stability pass on the player.
+
+- **Notification Center and Control Center leave the video alone.** Pulling them down no longer
+  starts (and then undoes) Picture in Picture, so there's no flicker and no pause; the video keeps
+  playing underneath. Automatic Picture in Picture is now only attempted when you actually leave
+  the app. (iOS doesn't let a web-based player start it reliably from the background, so it may
+  not appear on every device; the sound keeps playing either way and the PiP button always works.)
+- **Closing the player keeps the video visible** during the closing animation, then hands it to the
+  mini player, which fades from the thumbnail into the live picture instead of flashing black.
+  Opening the player and rotating do the same.
+- **Single taps respond instantly.** Controls appear the moment you tap instead of after a short
+  wait; a second tap still turns it into a double tap (seek, or play/pause in the middle).
+- **No more Subscribe → Subscribed flicker** when a video opens: the channel and action buttons
+  show a neutral placeholder until the real state has loaded.
+
 ## 1.2.1 — 2026-11-16
 
 - **Notification Center and Control Center don't interrupt the video.** In full screen, a swipe

@@ -76,6 +76,8 @@ struct WatchDetails {
     /// Real targets for the (shortened) links and timestamps in the description.
     var descriptionLinks: [TextLink] = []
     var chapters: [Chapter] = []
+    /// Filled in from the list cell while the real details load (no likes or subscription yet).
+    var isPlaceholder = false
 }
 
 struct Chapter: Hashable, Identifiable {

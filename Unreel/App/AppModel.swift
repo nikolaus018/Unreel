@@ -27,9 +27,7 @@ final class AppModel: ObservableObject {
     @Published var youPath: [Route] = []
     @Published var searchPath: [Route] = []
 
-    @Published var showPlayer = false {
-        didSet { player.watchVisible = showPlayer }
-    }
+    @Published var showPlayer = false
     @Published private(set) var queue: PlayQueue?
     /// "Up next in N seconds" card shown when a video ends.
     @Published private(set) var upNext: (video: VideoItem, seconds: Int)?
@@ -104,7 +102,8 @@ final class AppModel: ObservableObject {
         watchTask?.cancel()
         if watch?.videoId != video.id {
             watch = WatchDetails(videoId: video.id, title: video.title, views: video.views, date: video.published,
-                                 channel: video.channelId.map { ChannelItem(id: $0, name: video.channelName ?? "", avatar: video.channelAvatar) })
+                                 channel: video.channelId.map { ChannelItem(id: $0, name: video.channelName ?? "", avatar: video.channelAvatar) },
+                                 isPlaceholder: true)
         }
         watchError = nil
         watchTask = Task {
@@ -126,7 +125,11 @@ final class AppModel: ObservableObject {
                 player.state.chapters = details.chapters
                 player.updateMetadata(title: details.title, channel: details.channel?.name)
             } catch {
-                if !Task.isCancelled { watchError = error.localizedDescription }
+                if !Task.isCancelled {
+                    watchError = error.localizedDescription
+                    // Don't leave the buttons greyed out forever: they still work without details.
+                    watch?.isPlaceholder = false
+                }
             }
         }
     }
