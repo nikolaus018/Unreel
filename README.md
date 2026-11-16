@@ -1,18 +1,12 @@
-<div align="center">
+﻿# Unreel
 
-<img src="Unreel/Assets.xcassets/AppIcon.appiconset/icon.png" width="128" alt="Unreel icon">
+![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.3.0-red) ![Distribution](https://img.shields.io/badge/distribution-sideload-lightgrey)
 
-# Unreel
+Native iOS 26 YouTube client without ads, Shorts or sponsor segments.
 
-**YouTube without ads, without Shorts, without sponsor reads — as a native iOS 26 app.**
+<img src="docs/screenshots/watch.png" width="23%" alt="Watch screen with dislike count and the resume notice"> <img src="docs/screenshots/search.png" width="23%" alt="Search"> <img src="docs/screenshots/comments.png" width="23%" alt="Comments"> <img src="docs/screenshots/feed-control.png" width="23%" alt="Feed Control with blocked words">
 
-![iOS 26.1+](https://img.shields.io/badge/iOS-26.1%2B-blue) ![Swift 5](https://img.shields.io/badge/Swift-5-orange) ![Version](https://img.shields.io/badge/version-1.3.0-red) ![Sideload](https://img.shields.io/badge/distribution-sideload-lightgrey)
-
-<img src="docs/screenshots/watch.png" width="230" alt="Watch screen with dislike count and the resume notice"> <img src="docs/screenshots/search.png" width="230" alt="Search"> <img src="docs/screenshots/comments.png" width="230" alt="Comments"> <img src="docs/screenshots/feed-control.png" width="230" alt="Feed Control with blocked words">
-
-<img src="docs/screenshots/fullscreen.png" width="700" alt="Full-screen player">
-
-</div>
+![Full-screen player](docs/screenshots/fullscreen.png)
 
 Every screen in Unreel is SwiftUI: feeds, search, channels, playlists, comments and the player
 controls. YouTube's data comes from its internal API (InnerTube), using the same cookies as your
@@ -114,6 +108,15 @@ Requires iOS 26.1 or later.
 Links: `unreel://watch?v=VIDEO_ID&t=90` or `unreel://open?url=https://youtu.be/VIDEO_ID`.
 
 ## How ad blocking works
+
+```mermaid
+flowchart LR
+    A[YouTube player request] --> B[1. Data cleaning<br/>ad fields removed from player data]
+    B --> C[2. Filter lists<br/>~108k WebKit content-blocker rules + in-page scriptlets]
+    C --> D{Ad still starts?}
+    D -- no --> E[Video plays]
+    D -- yes --> F[3. Fallback<br/>mute and skip]
+```
 
 1. **Data cleaning.** A script runs in the player page before YouTube's code does. It removes
    `adPlacements`, `playerAds`, `adSlots` and promoted items from the player's data, both from
