@@ -130,7 +130,7 @@ struct WatchView: View {
             Button { showDescription = true } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(w.title.isEmpty ? (app.player.current?.title ?? " ") : w.title)
-                        .font(.system(size: 19, weight: .bold))
+                        .font(.title3.weight(.bold))
                         .lineLimit(3)
                         .multilineTextAlignment(.leading)
                         .foregroundStyle(.primary)
@@ -145,6 +145,7 @@ struct WatchView: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityHint("Shows the description")
             .padding(.top, 14)
 
             if let c = w.channel {
@@ -159,7 +160,9 @@ struct WatchView: View {
                         }
                         .contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(.pressable)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityHint("Opens the channel")
                     Spacer(minLength: 8)
                     SubscribeButton(subscribed: w.subscribed ?? false) { app.setSubscribed(c, !(w.subscribed ?? false)) }
                 }
@@ -180,15 +183,23 @@ struct WatchView: View {
                     Button { app.rate(.liked) } label: {
                         Label(w.likes ?? "Like", systemImage: w.likeStatus == .liked ? "hand.thumbsup.fill" : "hand.thumbsup")
                             .padding(.leading, 14).padding(.trailing, 12)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Like")
+                    .accessibilityValue(w.likes ?? "")
+                    .accessibilityAddTraits(w.likeStatus == .liked ? .isSelected : [])
                     Divider().frame(height: 20)
                     Button { app.rate(.disliked) } label: {
                         Image(systemName: w.likeStatus == .disliked ? "hand.thumbsdown.fill" : "hand.thumbsdown")
-                            .padding(.horizontal, 12)
-                            .accessibilityLabel("Dislike")
+                            .padding(.horizontal, 14)
+                            .frame(maxHeight: .infinity)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityLabel("Dislike")
+                    .accessibilityAddTraits(w.likeStatus == .disliked ? .isSelected : [])
                 }
-                .frame(height: 36)
+                .frame(height: 40)
                 .glassEffect(.regular.interactive(), in: Capsule())
                 .contentTransition(.symbolEffect(.replace))
 
@@ -200,6 +211,7 @@ struct WatchView: View {
                     }
                 }
                 Button { app.player.togglePiP() } label: { Label("PiP", systemImage: "pip.enter").pill() }
+                    .accessibilityLabel("Picture in Picture")
             }
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.primary)
@@ -225,7 +237,9 @@ struct WatchView: View {
             .padding(12)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Shows all comments")
     }
 
     /// The playlist being played, with the current video marked.
@@ -237,7 +251,7 @@ struct WatchView: View {
                     Text("\(q.index + 1) of \(q.items.count)").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Image(systemName: "list.bullet").foregroundStyle(.secondary)
+                Image(systemName: "list.bullet").foregroundStyle(.secondary).accessibilityHidden(true)
             }
             ScrollViewReader { proxy in
                 ScrollView(.horizontal, showsIndicators: false) {
@@ -257,7 +271,11 @@ struct WatchView: View {
                                 }
                                 .frame(width: 150)
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.pressable)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel(v.title)
+                            .accessibilityValue(index == q.index ? "Now playing" : "\(index + 1) of \(q.items.count)")
+                            .accessibilityAddTraits(index == q.index ? [.isButton, .isSelected] : .isButton)
                             .id(index)
                         }
                     }
@@ -277,14 +295,18 @@ struct WatchView: View {
     private func upNext(_ w: WatchDetails) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("Up Next").font(.headline)
+                Text("Up Next").font(.headline).accessibilityAddTraits(.isHeader)
                 Spacer()
                 Toggle(isOn: $settings.autoplayNext) {
-                    Text("Autoplay").font(.footnote).foregroundStyle(.secondary)
+                    Label("Autoplay", systemImage: settings.autoplayNext ? "play.circle.fill" : "play.slash")
+                        .font(.footnote.weight(.semibold))
+                        .contentTransition(.symbolEffect(.replace))
                 }
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .fixedSize()
+                .toggleStyle(.button)
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.capsule)
+                .tint(settings.autoplayNext ? Color.accentColor : .secondary)
+                .sensoryFeedback(.selection, trigger: settings.autoplayNext)
             }
             LazyVStack(alignment: .leading, spacing: 14) {
                 ForEach(w.related) { v in
@@ -314,22 +336,37 @@ struct SubscribeButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(subscribed ? "Subscribed" : "Subscribe")
+            Label(subscribed ? "Subscribed" : "Subscribe", systemImage: subscribed ? "checkmark" : "plus")
+                .labelStyle(SubscribeLabelStyle(showIcon: subscribed))
                 .font(.subheadline.weight(.semibold))
                 .padding(.horizontal, 16)
-                .frame(height: 36)
+                .frame(minHeight: 40)
                 .foregroundStyle(subscribed ? Color.primary : Color(uiColor: .systemBackground))
                 .background(subscribed ? Color.secondary.opacity(0.18) : Color.primary, in: Capsule())
+                .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.pressable)
         .animation(.snappy, value: subscribed)
+        .accessibilityLabel(subscribed ? "Unsubscribe" : "Subscribe")
+        .accessibilityValue(subscribed ? "Subscribed" : "")
+    }
+}
+
+private struct SubscribeLabelStyle: LabelStyle {
+    let showIcon: Bool
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            if showIcon { configuration.icon.imageScale(.small).transition(.scale.combined(with: .opacity)) }
+            configuration.title
+        }
     }
 }
 
 private extension View {
     func pill() -> some View {
         self.padding(.horizontal, 14)
-            .frame(height: 36)
+            .frame(height: 40)
+            .contentShape(Capsule())
             .glassEffect(.regular.interactive(), in: Capsule())
     }
 }
@@ -351,7 +388,7 @@ struct DescriptionSheet: View {
                     }
                     if !details.chapters.isEmpty {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Chapters").font(.headline)
+                            Text("Chapters").font(.headline).accessibilityAddTraits(.isHeader)
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(alignment: .top, spacing: 12) {
                                     ForEach(details.chapters) { ch in
@@ -372,7 +409,11 @@ struct DescriptionSheet: View {
                                             }
                                             .frame(width: 140)
                                         }
-                                        .buttonStyle(.plain)
+                                        .buttonStyle(.pressable)
+                                        .accessibilityElement(children: .ignore)
+                                        .accessibilityLabel("\(ch.title), \(format(ch.start))")
+                                        .accessibilityHint("Plays from this chapter")
+                                        .accessibilityAddTraits(.isButton)
                                     }
                                 }
                             }
@@ -387,6 +428,16 @@ struct DescriptionSheet: View {
             }
             .navigationTitle("Description")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }
+                }
+                if let url = URL(string: "https://youtu.be/\(details.videoId)") {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        ShareLink(item: url)
+                    }
+                }
+            }
         }
     }
 
@@ -396,6 +447,7 @@ struct DescriptionSheet: View {
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -432,15 +484,20 @@ struct CommentCell: View {
                         .padding(.horizontal, comment.isOwner ? 6 : 0).padding(.vertical, comment.isOwner ? 1 : 0)
                         .background(comment.isOwner ? Color.secondary.opacity(0.2) : .clear, in: Capsule())
                     if let p = comment.published { Text(p).font(.caption).foregroundStyle(.secondary) }
-                    if comment.isPinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
+                    if comment.isPinned {
+                        Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary)
+                            .accessibilityLabel("Pinned")
+                    }
                 }
                 Text(linkified(comment.text)).font(.subheadline).textSelection(.enabled)
                 if let l = comment.likes, !l.isEmpty {
                     Label(l, systemImage: "hand.thumbsup").font(.caption).foregroundStyle(.secondary)
+                        .accessibilityLabel("\(l) likes")
                 }
             }
         }
         .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -478,6 +535,7 @@ final class CommentsModel: ObservableObject {
 struct CommentsView: View {
     let token: String
     let count: String?
+    @Environment(\.dismiss) private var dismiss
     @StateObject private var model: CommentsModel
 
     init(token: String, count: String?) {
@@ -493,6 +551,11 @@ struct CommentsView: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .navigationDestination(for: Comment.self) { parent in
                     RepliesView(parent: parent)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(role: .close) { dismiss() }
+                    }
                 }
         }
     }

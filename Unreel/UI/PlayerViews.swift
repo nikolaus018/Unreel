@@ -56,6 +56,8 @@ struct PlayerControls: View {
     @GestureState private var boosting = false
     @State private var rateBeforeBoost: Double = 1
     @State private var showOptions = false
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOver
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         ZStack {
@@ -119,7 +121,7 @@ struct PlayerControls: View {
                     if fb.forward { Spacer() }
                     VStack(spacing: 4) {
                         Image(systemName: fb.forward ? "forward.fill" : "backward.fill")
-                            .font(.system(size: 26, weight: .semibold))
+                            .font(.title2.weight(.semibold))
                         Text("\(seekStack) seconds").font(.caption.weight(.semibold)).monospacedDigit()
                     }
                     .foregroundStyle(.white)
@@ -135,12 +137,11 @@ struct PlayerControls: View {
 
             if let reason = state.unplayable {
                 VStack(spacing: 10) {
-                    Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 30))
-                    Text("Video unavailable").font(.headline)
+                    Image(systemName: "exclamationmark.triangle.fill").font(.title).accessibilityHidden(true)
+                    Text("Video Unavailable").font(.headline)
                     Text(reason).font(.footnote).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.8)).lineLimit(4)
-                    Button("Close") { app.closePlayer() }
+                    Button("Close Player") { app.closePlayer() }
                         .buttonStyle(.glass)
-                        .controlSize(.small)
                         .padding(.top, 4)
                 }
                 .foregroundStyle(.white)
@@ -156,6 +157,7 @@ struct PlayerControls: View {
                     .allowsHitTesting(false)
             } else if (state.waiting && state.playing) || !state.hasStarted {
                 ProgressView().controlSize(.large).tint(.white).allowsHitTesting(false)
+                    .accessibilityLabel("Loading video")
             }
 
             if visible && !state.isAd && state.unplayable == nil && app.upNext == nil {
@@ -182,8 +184,11 @@ struct PlayerControls: View {
                 player.setRate(rateBeforeBoost)
             }
         }
+        .background { keyboardShortcuts }
+        .dynamicTypeSize(...DynamicTypeSize.xxLarge)
         .onAppear { scheduleHide() }
         .onChange(of: state.playing) { _, playing in if playing { scheduleHide() } else { show() } }
+        .onChange(of: voiceOver) { _, on in if on { show() } }
         .sheet(isPresented: $showOptions, onDismiss: { scheduleHide() }) {
             PlayerOptionsSheet(state: state, player: player)
                 .presentationDetents(fullscreen ? [.large] : [.medium, .large])
@@ -196,6 +201,24 @@ struct PlayerControls: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 2) { doubleTapSeek(forward: forward) }
             .onTapGesture { visible.toggle(); if visible { scheduleHide() } }
+            .accessibilityHidden(true)
+    }
+
+    /// Hardware keyboard: space plays and pauses, arrows seek, F toggles full screen.
+    private var keyboardShortcuts: some View {
+        ZStack {
+            Button("Play or Pause") { player.togglePlay(); show() }
+                .keyboardShortcut(.space, modifiers: [])
+            Button("Back 10 Seconds") { player.seek(by: -10); show() }
+                .keyboardShortcut(.leftArrow, modifiers: [])
+            Button("Forward 10 Seconds") { player.seek(by: 10); show() }
+                .keyboardShortcut(.rightArrow, modifiers: [])
+            Button(fullscreen ? "Exit Full Screen" : "Full Screen") { setOrientation(landscape: !fullscreen) }
+                .keyboardShortcut("f", modifiers: [])
+        }
+        .opacity(0)
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private var controls: some View {
@@ -229,8 +252,8 @@ struct PlayerControls: View {
             if !fullscreen {
                 Button(action: onCollapse) {
                     Image(systemName: "chevron.down")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 36, height: 36)
+                        .font(.body.weight(.semibold))
+                        .frame(width: 44, height: 44)
                         .contentShape(Circle())
                 }
                 .glassEffect(.clear.interactive(), in: Circle())
@@ -246,7 +269,7 @@ struct PlayerControls: View {
             Spacer(minLength: 8)
 
             topButton(state.captionTrack != nil ? "captions.bubble.fill" : "captions.bubble",
-                      label: state.captionTrack != nil ? "Turn off captions" : "Turn on captions") {
+                      label: state.captionTrack != nil ? "Turn Off Captions" : "Turn On Captions") {
                 if !player.toggleCaptions() { app.show(Toast(icon: "captions.bubble", text: "No captions for this video")) }
                 show()
             }
@@ -256,7 +279,7 @@ struct PlayerControls: View {
                 player.togglePiP()
             }
 
-            topButton("gearshape", label: "Playback settings") {
+            topButton("gearshape", label: "Playback Options") {
                 showOptions = true
                 hideTask?.cancel()
             }
@@ -266,8 +289,8 @@ struct PlayerControls: View {
     private func topButton(_ icon: String, label: String, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: icon)
-                .font(.system(size: 16, weight: .semibold))
-                .frame(width: 36, height: 36)
+                .font(.callout.weight(.semibold))
+                .frame(width: 44, height: 44)
                 .contentShape(Circle())
         }
         .glassEffect(.clear.interactive(), in: Circle())
@@ -277,7 +300,7 @@ struct PlayerControls: View {
     private var centerButtons: some View {
         HStack(spacing: fullscreen ? 72 : 44) {
             Button { player.seek(by: -10); show() } label: {
-                Image(systemName: "gobackward.10").font(.system(size: 24, weight: .semibold)).frame(width: 52, height: 52)
+                Image(systemName: "gobackward.10").font(.title2.weight(.semibold)).frame(width: 56, height: 56)
                     .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
@@ -288,17 +311,17 @@ struct PlayerControls: View {
                 show()
             } label: {
                 Image(systemName: state.ended ? "arrow.counterclockwise" : (state.playing ? "pause.fill" : "play.fill"))
-                    .font(.system(size: 34, weight: .bold))
+                    .font(.largeTitle.weight(.bold))
                     .contentTransition(.symbolEffect(.replace))
                     .frame(width: 72, height: 72)
                     .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
             .opacity((state.waiting && state.playing) || !state.hasStarted ? 0 : 1)
-            .accessibilityLabel(state.playing ? "Pause" : "Play")
+            .accessibilityLabel(state.ended ? "Replay" : (state.playing ? "Pause" : "Play"))
 
             Button { player.seek(by: 10); show() } label: {
-                Image(systemName: "goforward.10").font(.system(size: 24, weight: .semibold)).frame(width: 52, height: 52)
+                Image(systemName: "goforward.10").font(.title2.weight(.semibold)).frame(width: 56, height: 56)
                     .contentShape(Circle())
             }
             .glassEffect(.clear.interactive(), in: Circle())
@@ -309,15 +332,20 @@ struct PlayerControls: View {
     private var bottomBar: some View {
         VStack(spacing: 4) {
             HStack(spacing: 4) {
-                Text(format(scrubbing ?? state.time))
-                Text("/").foregroundStyle(.white.opacity(0.6))
-                Text(format(state.duration)).foregroundStyle(.white.opacity(0.8))
+                Group {
+                    Text(format(scrubbing ?? state.time))
+                    Text("/").foregroundStyle(.white.opacity(0.6))
+                    Text(format(state.duration)).foregroundStyle(.white.opacity(0.8))
+                }
+                .accessibilityHidden(true)
                 if let ch = state.chapter(at: scrubbing ?? state.time) {
                     Text("· \(ch.title)").lineLimit(1).foregroundStyle(.white.opacity(0.9))
+                        .accessibilityLabel("Chapter: \(ch.title)")
                 }
                 Spacer(minLength: 8)
                 if state.rate != 1 {
                     Text(rateLabel(state.rate)).font(.caption2.weight(.bold))
+                        .accessibilityLabel("Speed \(rateLabel(state.rate))")
                         .padding(.horizontal, 6).padding(.vertical, 2)
                         .background(.white.opacity(0.2), in: Capsule())
                 }
@@ -325,11 +353,12 @@ struct PlayerControls: View {
                     setOrientation(landscape: !fullscreen)
                 } label: {
                     Image(systemName: fullscreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 40, height: 36)
+                        .font(.callout.weight(.semibold))
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
-                .accessibilityLabel(fullscreen ? "Exit full screen" : "Full screen")
+                .padding(.vertical, -6)
+                .accessibilityLabel(fullscreen ? "Exit Full Screen" : "Full Screen")
             }
             .font(.caption.weight(.semibold).monospacedDigit())
             .shadow(color: .black.opacity(0.5), radius: 3)
@@ -368,12 +397,13 @@ struct PlayerControls: View {
         hideTask?.cancel()
         hideTask = Task {
             try? await Task.sleep(for: .seconds(4))
-            guard !Task.isCancelled, state.playing, scrubbing == nil, !showOptions else { return }
+            // VoiceOver users can't tap the video to bring the controls back, so they stay.
+            guard !Task.isCancelled, state.playing, scrubbing == nil, !showOptions, !voiceOver else { return }
             visible = false
         }
     }
 
-    private func rateLabel(_ r: Double) -> String { r == 1 ? "Normal" : String(format: "%gx", r) }
+    private func rateLabel(_ r: Double) -> String { r == 1 ? "Normal" : String(format: "%g×", r) }
 
     private func qualityLabel(_ q: String) -> String {
         VideoQuality(rawValue: q)?.title ?? (q == "auto" || q.isEmpty ? "Auto" : q)
@@ -389,6 +419,8 @@ struct CaptionOverlay: View {
     @ObservedObject var state: PlaybackState
     let fullscreen: Bool
     let controlsVisible: Bool
+    @ScaledMetric(relativeTo: .body) private var fullSize: CGFloat = 20
+    @ScaledMetric(relativeTo: .footnote) private var compactSize: CGFloat = 15
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.1)) { context in
@@ -396,7 +428,7 @@ struct CaptionOverlay: View {
                 Spacer()
                 if let text = CaptionParser.text(at: state.estimatedTime(at: context.date), in: state.cues) {
                     Text(text)
-                        .font(.system(size: fullscreen ? 20 : 15, weight: .semibold))
+                        .font(.system(size: fullscreen ? fullSize : compactSize, weight: .semibold))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10).padding(.vertical, 5)
@@ -432,21 +464,25 @@ struct PlayerOptionsSheet: View {
                         row(t.name, selected: state.captionTrack == t) { player.setCaptions(t) }
                     }
                 }
-                Section("Playback speed") {
+                Section("Speed") {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {
                             ForEach(speeds, id: \.self) { r in
                                 let selected = abs(state.rate - r) < 0.01
                                 Button {
                                     player.setRate(r)
+                                    UISelectionFeedbackGenerator().selectionChanged()
                                 } label: {
                                     Text(r == 1 ? "1×" : String(format: "%g×", r))
-                                        .font(.subheadline.weight(.semibold))
-                                        .frame(minWidth: 52, minHeight: 36)
+                                        .font(.subheadline.weight(.semibold).monospacedDigit())
+                                        .frame(minWidth: 52, minHeight: 44)
                                         .foregroundStyle(selected ? Color.white : Color.primary)
                                         .background(selected ? Color.accentColor : Color.secondary.opacity(0.15), in: Capsule())
+                                        .contentShape(Capsule())
                                 }
                                 .buttonStyle(.plain)
+                                .accessibilityLabel(r == 1 ? "Normal speed" : String(format: "%g times speed", r))
+                                .accessibilityAddTraits(selected ? .isSelected : [])
                             }
                         }
                         .padding(.vertical, 4)
@@ -486,10 +522,14 @@ struct PlayerOptionsSheet: View {
             HStack {
                 Text(title).foregroundStyle(.primary)
                 Spacer()
-                if selected { Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor) }
+                if selected {
+                    Image(systemName: "checkmark").fontWeight(.semibold).foregroundStyle(Color.accentColor)
+                        .accessibilityHidden(true)
+                }
             }
             .contentShape(Rectangle())
         }
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
@@ -564,7 +604,24 @@ struct Scrubber: View {
             )
             .animation(.spring(duration: 0.2), value: scrubbing == nil)
         }
-        .frame(height: 22)
+        // A 36 pt touch area that only takes 22 pt of layout.
+        .frame(height: 36)
+        .padding(.vertical, -7)
+        .accessibilityElement()
+        .accessibilityLabel("Playback position")
+        .accessibilityValue(duration > 0 ? "\(spoken(time)) of \(spoken(duration))" : "Not started")
+        .accessibilityAdjustableAction { direction in
+            guard duration > 0 else { return }
+            switch direction {
+            case .increment: onCommit(min(time + 10, duration))
+            case .decrement: onCommit(max(time - 10, 0))
+            @unknown default: break
+            }
+        }
+    }
+
+    private func spoken(_ t: Double) -> String {
+        Duration.seconds(Int(t.isFinite ? t : 0)).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
     }
 }
 
@@ -590,12 +647,14 @@ struct UpNextCard: View {
                                 .rotationEffect(.degrees(-90))
                                 .animation(.linear(duration: 1), value: seconds)
                             Text("\(seconds)").font(.headline.monospacedDigit())
+                                .contentTransition(.numericText(countsDown: true))
                         }
                         .frame(width: 38, height: 38)
                         .foregroundStyle(.white)
                     }
                 VStack(alignment: .leading, spacing: compact ? 6 : 10) {
-                    Text("Up next").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                    Text("Up Next").font(.caption.weight(.semibold)).foregroundStyle(.white.opacity(0.7))
+                        .accessibilityLabel("Up next in \(seconds) seconds")
                     Text(video.title).font(compact ? .subheadline.weight(.semibold) : .headline).lineLimit(2).foregroundStyle(.white)
                     HStack(spacing: 8) {
                         Button("Cancel") { app.cancelUpNext() }
@@ -636,28 +695,34 @@ struct MiniPlayer: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityElement(children: .combine)
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Opens the player")
+                .accessibilityAction { app.showPlayer = true }
             }
             Button { player.togglePlay(); app.haptic() } label: {
                 Image(systemName: state.playing ? "pause.fill" : "play.fill")
                     .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 32, height: 32)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
             }
             .accessibilityLabel(state.playing ? "Pause" : "Play")
             if placement != .inline {
                 Button { app.haptic(); app.playNext() } label: {
-                    Image(systemName: "forward.fill").frame(width: 32, height: 32)
+                    Image(systemName: "forward.fill").frame(width: 40, height: 44).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Next video")
                 .disabled(!app.canPlayNext)
                 Button { app.closePlayer() } label: {
-                    Image(systemName: "xmark").font(.body.weight(.bold)).frame(width: 28, height: 32)
+                    Image(systemName: "xmark").font(.body.weight(.bold)).frame(width: 36, height: 44).contentShape(Rectangle())
                 }
                 .accessibilityLabel("Close player")
             }
         }
         .font(.body.weight(.semibold))
         .foregroundStyle(.primary)
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onTapGesture { app.showPlayer = true }
         .contextMenu {

@@ -56,8 +56,8 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 **Native screens**
 - **Home:** your recommendations with watched-progress bars, plus Music, Gaming, Podcasts, News and Sports chips.
 - **Subscriptions:** a row of your channels and the latest uploads.
-- **You:** History, Watch Later, Liked videos, Playlists, Channels, and the ads-blocked stats.
-- **Search:** native search field with suggestions and recent searches, plus All / Videos / Channels / Playlists / Live filters.
+- **You:** History, Watch Later, Liked videos, Playlists, Channels, the ads-blocked stats and Settings.
+- **Search:** native search field with suggestions and recent searches, plus All / Videos / Channels / Playlists / Live filters. Paste a copied YouTube link to open it.
 - **Watch page:** like/dislike, Subscribe, Save to Watch Later, Share, PiP; a description sheet with working links, tappable timestamps and a chapter list; comments with reply threads; Up Next.
 - **Playlists:** Play All and Shuffle. Playing from a playlist builds a queue that Next and autoplay follow.
 - **Channels:** banner, stats, Subscribe, and Videos / Live / Playlists tabs.
@@ -66,7 +66,8 @@ Unreel can't go on the App Store. Sideload it with a free Apple ID, for example 
 **Everything else**
 - Google sign-in, with personal feeds and account actions.
 - `youtube.com`, `youtu.be` and `unreel://` links open in the app, including `?t=` timestamps.
-- Dark and light mode, haptics, a settings screen for all of the above.
+- Dark and light mode, haptics, and a settings screen for all of the above (**You ▸ Settings**).
+- Built to Apple's Human Interface Guidelines: VoiceOver, Dynamic Type, Reduce Motion, 44 pt touch targets, hardware keyboard shortcuts in the player, and an iPad sidebar.
 
 ## Install
 
@@ -91,6 +92,7 @@ Requires iOS 26.1 or later.
 | Drag the scrubber | Controls | Seek, with a tick at each chapter |
 | Long-press | Any video | Play Next, Watch Later, Share… |
 | Long-press | Mini player | Open, PiP, Close |
+| Space / ← → / F | Player (hardware keyboard) | Play-pause / seek 10 s / full screen |
 
 Links: `unreel://watch?v=VIDEO_ID&t=90` or `unreel://open?url=https://youtu.be/VIDEO_ID`.
 
@@ -105,7 +107,7 @@ Links: `unreel://watch?v=VIDEO_ID&t=90` or `unreel://open?url=https://youtu.be/V
    about 108k network rules are compiled into WebKit content blockers. YouTube-specific uBlock
    *scriptlets* (`json-prune`, `set-constant`, `trusted-replace-fetch-response`, …) and
    `replace=` rules run in the page. Lists update automatically (daily by default) or from
-   Settings, and a snapshot ships with the app so blocking works on first launch.
+   You ▸ Settings, and a snapshot ships with the app so blocking works on first launch.
 3. **Fallback.** If an ad still starts, it is muted and skipped.
 
 Because every list, browse and search screen is drawn natively, promoted cards are never shown

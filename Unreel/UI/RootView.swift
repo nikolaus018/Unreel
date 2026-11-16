@@ -20,13 +20,11 @@ struct RootView: View {
             Tab("You", systemImage: "person.crop.circle", value: RootTab.you) {
                 NavigationStack(path: $app.youPath) { YouView().routes() }
             }
-            Tab("Settings", systemImage: "gearshape", value: RootTab.settings) {
-                SettingsView()
-            }
             Tab(value: RootTab.search, role: .search) {
                 NavigationStack(path: $app.searchPath) { SearchScreen(settings: settings).routes() }
             }
         }
+        .tabViewStyle(.sidebarAdaptable)
         .tabBarMinimizeBehavior(.never)
         .tabViewBottomAccessory(isEnabled: player.current != nil) {
             MiniPlayer(player: player, state: player.state)
@@ -63,6 +61,7 @@ private struct RouteDestinations: ViewModifier {
             case .channel(let id): ChannelView(id: id, settings: settings)
             case .playlist(let id, let title): PlaylistView(id: id, title: title, settings: settings)
             case .browse(let id, let title): BrowseView(browseId: id, title: title, settings: settings)
+            case .settings: SettingsView()
             }
         }
     }

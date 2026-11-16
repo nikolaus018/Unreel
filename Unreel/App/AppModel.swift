@@ -11,7 +11,7 @@ struct Toast: Identifiable, Equatable {
 }
 
 enum RootTab: Hashable {
-    case home, subscriptions, you, settings, search
+    case home, subscriptions, you, search
 }
 
 /// App-wide state: what is playing, navigation per tab, the signed-in account and toasts.
@@ -244,6 +244,7 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 try await InnerTube.shared.setSubscribed(channel.id, subscribed)
+                if subscribed { successHaptic() }
                 show(Toast(icon: subscribed ? "bell.fill" : "bell.slash", text: subscribed ? "Subscribed to \(channel.name)" : "Unsubscribed"))
             } catch {
                 if watch?.channel?.id == channel.id { watch?.subscribed = !subscribed }
@@ -261,6 +262,7 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 try await InnerTube.shared.setWatchLater(video.id, saved)
+                if saved { successHaptic() }
                 show(Toast(icon: saved ? "clock.fill" : "clock", text: saved ? "Saved to Watch Later" : "Removed from Watch Later"))
             } catch {
                 if saved { watchLater.remove(video.id) } else { watchLater.insert(video.id) }
@@ -286,9 +288,6 @@ final class AppModel: ObservableObject {
         case .subscriptions: subscriptionsPath.append(route)
         case .you: youPath.append(route)
         case .search: searchPath.append(route)
-        case .settings:
-            tab = .home
-            homePath.append(route)
         }
     }
 
@@ -327,6 +326,26 @@ final class AppModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Opens the first YouTube link found in pasted text. Returns false if there is none.
+    @discardableResult
+    func openYouTubeLink(in text: String) -> Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates: [URL] = []
+        if let url = URL(string: trimmed) { candidates.append(url) }
+        if let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue) {
+            candidates += detector.matches(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)).compactMap(\.url)
+        }
+        guard let url = candidates.first(where: { url in
+            guard let host = url.host?.lowercased() else { return url.scheme == "unreel" }
+            return host.hasSuffix("youtube.com") || host == "youtu.be"
+        }) else {
+            show(Toast(icon: "exclamationmark.circle", text: "That isn't a YouTube link"))
+            return false
+        }
+        open(url: url)
+        return true
     }
 
     /// "90", "90s", "1m30s", "1h2m3s" -> seconds.
@@ -385,7 +404,10 @@ final class AppModel: ObservableObject {
     func show(_ toast: Toast) {
         withAnimation(.spring(duration: 0.35)) { self.toast = toast }
         let id = toast.id
-        DispatchQueue.main.asyncAfter(deadline: .now() + (toast.actionTitle == nil ? 2.4 : 4.0)) { [weak self] in
+        // Give VoiceOver users time to hear the message and reach its action.
+        var duration = toast.actionTitle == nil ? 2.4 : 4.5
+        if UIAccessibility.isVoiceOverRunning { duration *= 2.5 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             guard self?.toast?.id == id else { return }
             withAnimation(.easeOut(duration: 0.25)) { self?.toast = nil }
         }
@@ -393,5 +415,10 @@ final class AppModel: ObservableObject {
 
     func haptic() {
         if settings.haptics { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
+    }
+
+    /// Confirms a completed action (subscribe, save) with a success haptic.
+    func successHaptic() {
+        if settings.haptics { UINotificationFeedbackGenerator().notificationOccurred(.success) }
     }
 }

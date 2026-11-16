@@ -76,3 +76,19 @@ final class TimestampTests: XCTestCase {
         XCTAssertEqual(AppModel.parseTimestamp(nil), 0)
     }
 }
+
+/// What VoiceOver reads for video cells.
+final class AccessibilityTextTests: XCTestCase {
+    func testSpokenDuration() {
+        XCTAssertNotNil(VideoItem.spokenDuration("12:05"))
+        XCTAssertNotEqual(VideoItem.spokenDuration("1:02:03"), VideoItem.spokenDuration("2:03"))
+        XCTAssertNil(VideoItem.spokenDuration("LIVE"))
+        XCTAssertNil(VideoItem.spokenDuration("1:2:3:4"))
+    }
+
+    func testDescriptionSkipsDurationForLive() {
+        let live = VideoItem(id: "x", title: "Launch", channelName: "NASA", duration: "1:00", isLive: true)
+        XCTAssertTrue(live.accessibilityDescription.hasPrefix("Launch, Live, NASA"))
+        XCTAssertEqual(live.accessibilityDescription, "Launch, Live, NASA")
+    }
+}

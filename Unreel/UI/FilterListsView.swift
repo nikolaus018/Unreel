@@ -95,13 +95,14 @@ struct FilterListsView: View {
                 Image(systemName: "gearshape.2.fill").foregroundStyle(.orange)
             }
         }
-        .font(.system(size: 30))
+        .font(.title)
+        .accessibilityHidden(true)
         .symbolEffect(.pulse, isActive: filters.phase.isBusy)
     }
 
     private var statusTitle: String {
         switch filters.phase {
-        case .idle: "Protection active"
+        case .idle: "Protection Active"
         case .downloading(let done, let total): "Downloading \(done) of \(total)…"
         case .compiling: "Compiling rules…"
         }

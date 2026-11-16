@@ -147,4 +147,5 @@ enum Route: Hashable {
     case channel(String)
     case playlist(String, String)    // id, title
     case browse(String, String)      // browseId, title (history, watch later, …)
+    case settings
 }

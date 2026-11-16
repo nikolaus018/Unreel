@@ -52,6 +52,7 @@ struct Thumbnail: View {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .accessibilityHidden(true)
             .overlay(alignment: .bottomTrailing) {
                 Group {
                     if video.isLive {
@@ -65,7 +66,8 @@ struct Thumbnail: View {
                             .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
                     }
                 }
-                .font(.system(size: small ? 10 : 12, weight: .semibold).monospacedDigit())
+                .font((small ? Font.caption2 : Font.caption).weight(.semibold).monospacedDigit())
+                .dynamicTypeSize(...DynamicTypeSize.xxLarge)
                 .foregroundStyle(.white)
                 .padding(small ? 4 : 7)
                 .padding(.bottom, (video.progress ?? 0) > 0 ? 3 : 0)
@@ -82,10 +84,52 @@ struct Avatar: View {
             .frame(width: size, height: size)
             .clipShape(Circle())
             .overlay(Circle().strokeBorder(.primary.opacity(0.06)))
+            .accessibilityHidden(true)
     }
 }
 
+// MARK: - Button styles
+
+/// Gives tappable cards the same pressed feedback as system buttons: a slight dim and shrink.
+struct PressableButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .contentShape(Rectangle())
+            .opacity(configuration.isPressed ? 0.7 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .animation(.spring(duration: 0.25), value: configuration.isPressed)
+    }
+}
+
+extension ButtonStyle where Self == PressableButtonStyle {
+    static var pressable: PressableButtonStyle { PressableButtonStyle() }
+}
+
 // MARK: - Video cells
+
+extension VideoItem {
+    /// What VoiceOver reads for a video cell.
+    var accessibilityDescription: String {
+        var parts = [title.isEmpty ? "Video" : title]
+        if isLive { parts.append("Live") }
+        if let channelName { parts.append(channelName) }
+        if let views { parts.append(views) }
+        if let published { parts.append(published) }
+        if !isLive, let d = duration, let spoken = Self.spokenDuration(d) { parts.append(spoken) }
+        if let p = progress, p > 0 { parts.append("\(Int(min(p, 1) * 100)) percent watched") }
+        return parts.joined(separator: ", ")
+    }
+
+    /// "1:02:03" -> "1 hour, 2 minutes, 3 seconds"
+    static func spokenDuration(_ text: String) -> String? {
+        let parts = text.split(separator: ":").compactMap { Int($0) }
+        guard !parts.isEmpty, parts.count <= 3 else { return nil }
+        let seconds = parts.reduce(0) { $0 * 60 + $1 }
+        return Duration.seconds(seconds).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide))
+    }
+}
 
 struct VideoCard: View {
     @EnvironmentObject private var app: AppModel
@@ -93,55 +137,84 @@ struct VideoCard: View {
     let video: VideoItem
 
     var body: some View {
+        // Separate buttons, so the avatar can open the channel while the rest plays the video.
         VStack(alignment: .leading, spacing: 10) {
-            Thumbnail(video: video)
+            Button(action: play) { Thumbnail(video: video) }
+                .buttonStyle(.pressable)
             HStack(alignment: .top, spacing: 12) {
                 if video.channelAvatar != nil {
-                    Avatar(url: video.channelAvatar)
-                        .onTapGesture { if let id = video.channelId { app.open(.channel(id)) } }
+                    Button {
+                        if let id = video.channelId { app.open(.channel(id)) }
+                    } label: {
+                        Avatar(url: video.channelAvatar)
+                    }
+                    .buttonStyle(.pressable)
+                    .disabled(video.channelId == nil)
                 }
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(video.title)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(2)
-                        .foregroundStyle(.primary)
-                    Text(video.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+                Button(action: play) {
+                    HStack(spacing: 0) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(video.title)
+                                .font(.subheadline.weight(.semibold))
+                                .lineLimit(2)
+                                .multilineTextAlignment(.leading)
+                                .foregroundStyle(.primary)
+                            Text(video.subtitle)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                        Spacer(minLength: 0)
+                    }
                 }
-                Spacer(minLength: 0)
+                .buttonStyle(.pressable)
             }
             .padding(.horizontal, 4)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { if let playAction { playAction(video) } else { app.play(video) } }
+        .videoAccessibility(video, play: play)
         .videoContextMenu(video)
+    }
+
+    private func play() {
+        if let playAction { playAction(video) } else { app.play(video) }
     }
 }
 
 struct VideoRow: View {
     @EnvironmentObject private var app: AppModel
     @Environment(\.playAction) private var playAction
+    @Environment(\.dynamicTypeSize) private var typeSize
     let video: VideoItem
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Thumbnail(video: video, cornerRadius: 10, small: true)
-                .frame(width: 164)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(video.title)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(3)
-                if let c = video.channelName { Text(c).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                let meta = [video.views, video.published].compactMap { $0 }.joined(separator: " · ")
-                if !meta.isEmpty { Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+        Button(action: play) {
+            // At accessibility text sizes the thumbnail moves above the text so titles stay readable.
+            let layout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+            layout {
+                Thumbnail(video: video, cornerRadius: 10, small: !typeSize.isAccessibilitySize)
+                    .frame(width: typeSize.isAccessibilitySize ? nil : 164)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(video.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+                    if let c = video.channelName { Text(c).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                    let meta = [video.views, video.published].compactMap { $0 }.joined(separator: " · ")
+                    if !meta.isEmpty { Text(meta).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { if let playAction { playAction(video) } else { app.play(video) } }
+        .buttonStyle(.pressable)
+        .videoAccessibility(video, play: play)
         .videoContextMenu(video)
+    }
+
+    private func play() {
+        if let playAction { playAction(video) } else { app.play(video) }
     }
 }
 
@@ -150,47 +223,101 @@ struct ChannelRow: View {
     let channel: ChannelItem
 
     var body: some View {
-        HStack(spacing: 14) {
-            Avatar(url: channel.avatar, size: 56)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(channel.name).font(.headline).lineLimit(1)
-                if let s = channel.subtitle { Text(s).font(.caption).foregroundStyle(.secondary) }
+        Button { app.open(.channel(channel.id)) } label: {
+            HStack(spacing: 14) {
+                Avatar(url: channel.avatar, size: 56)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(channel.name).font(.headline).lineLimit(1).foregroundStyle(.primary)
+                    if let s = channel.subtitle { Text(s).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
-            Spacer()
-            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { app.open(.channel(channel.id)) }
+        .buttonStyle(.pressable)
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("Opens the channel")
+        .contextMenu {
+            Button { app.open(.channel(channel.id)) } label: { Label("Go to Channel", systemImage: "person.crop.square") }
+            ShareLink(item: URL(string: "https://www.youtube.com/channel/\(channel.id)")!) {
+                Label("Share", systemImage: "square.and.arrow.up")
+            }
+        }
     }
 }
 
 struct PlaylistRow: View {
     @EnvironmentObject private var app: AppModel
+    @Environment(\.dynamicTypeSize) private var typeSize
     let playlist: PlaylistItem
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Color.clear
-                .aspectRatio(16 / 9, contentMode: .fit)
-                .overlay { RemoteImage(url: playlist.thumbnail) }
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .overlay(alignment: .bottomTrailing) {
-                    Label(playlist.count ?? "", systemImage: "list.bullet")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 5).padding(.vertical, 2)
-                        .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
-                        .padding(4)
+        Button { app.open(.playlist(playlist.id, playlist.title)) } label: {
+            let layout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+                : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+            layout {
+                Color.clear
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay { RemoteImage(url: playlist.thumbnail) }
+                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .overlay(alignment: .bottomTrailing) {
+                        if let count = playlist.count, !count.isEmpty {
+                            Label(count, systemImage: "list.bullet")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 5).padding(.vertical, 2)
+                                .background(.black.opacity(0.78), in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                                .padding(4)
+                        }
+                    }
+                    .frame(width: typeSize.isAccessibilitySize ? nil : 164)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(playlist.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(.primary)
+                    Text(playlist.owner ?? "Playlist").font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
-                .frame(width: 164)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(playlist.title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                Text(playlist.owner ?? "Playlist").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { app.open(.playlist(playlist.id, playlist.title)) }
+        .buttonStyle(.pressable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel([playlist.title, playlist.owner, playlist.count].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint("Opens the playlist")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct VideoAccessibility: ViewModifier {
+    @EnvironmentObject private var app: AppModel
+    let video: VideoItem
+    var play: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        content
+            .accessibilityElement(children: .ignore)
+            .accessibilityAction { if let play { play() } else { app.play(video) } }
+            .accessibilityLabel(video.accessibilityDescription)
+            .accessibilityHint("Plays the video")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction(named: "Go to Channel") {
+                if let id = video.channelId { app.open(.channel(id)) }
+            }
+            .accessibilityAction(named: app.watchLater.contains(video.id) ? "Remove from Watch Later" : "Save to Watch Later") {
+                app.toggleWatchLater(video)
+            }
+    }
+}
+
+extension View {
+    func videoAccessibility(_ video: VideoItem, play: (() -> Void)? = nil) -> some View {
+        modifier(VideoAccessibility(video: video, play: play))
     }
 }
 
@@ -303,6 +430,7 @@ extension FeedList where Header == EmptyView {
 }
 
 struct SkeletonList: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let style: FeedStyle
 
     var body: some View {
@@ -331,7 +459,9 @@ struct SkeletonList: View {
             }
         }
         .foregroundStyle(Color.secondary.opacity(0.14))
-        .phaseAnimator([0.55, 1.0]) { view, phase in view.opacity(phase) } animation: { _ in .easeInOut(duration: 0.9) }
+        .phaseAnimator(reduceMotion ? [1.0] : [0.55, 1.0]) { view, phase in view.opacity(phase) } animation: { _ in .easeInOut(duration: 0.9) }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading")
     }
 }
 
@@ -340,12 +470,14 @@ struct SkeletonList: View {
 struct ToastView: View {
     let toast: Toast
     let dismiss: () -> Void
+    @GestureState private var drag: CGFloat = 0
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: toast.icon)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(Color.accentColor)
+                .accessibilityHidden(true)
             Text(toast.text)
                 .font(.subheadline.weight(.medium))
                 .lineLimit(2)
@@ -353,12 +485,27 @@ struct ToastView: View {
                 Divider().frame(height: 18)
                 Button(title) { action(); dismiss() }
                     .font(.subheadline.weight(.semibold))
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .glassEffect(.regular, in: Capsule())
+        .padding(.horizontal, 18)
+        .frame(minHeight: 48)
+        .glassEffect(.regular.interactive(), in: Capsule())
         .padding(.horizontal, 20)
+        .offset(y: max(0, drag))
+        .gesture(
+            DragGesture(minimumDistance: 8)
+                .updating($drag) { g, state, _ in state = g.translation.height }
+                .onEnded { g in if g.translation.height > 24 || g.predictedEndTranslation.height > 80 { dismiss() } }
+        )
         .onTapGesture(perform: dismiss)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isStaticText)
+        .accessibilityAction(named: "Dismiss", dismiss)
+        .onAppear {
+            // Toasts are transient; make sure VoiceOver users hear them.
+            AccessibilityNotification.Announcement(toast.text).post()
+        }
     }
 }

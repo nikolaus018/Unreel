@@ -133,7 +133,9 @@ struct SubscribedChannelsRow: View {
                                     Text(c.name).font(.caption2).lineLimit(1).frame(width: 64).foregroundStyle(.primary)
                                 }
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.pressable)
+                            .accessibilityLabel(c.name)
+                            .accessibilityHint("Opens the channel")
                         }
                         NavigationLink(value: Route.browse("FEchannels", "Channels")) {
                             VStack(spacing: 6) {
@@ -144,6 +146,7 @@ struct SubscribedChannelsRow: View {
                             }
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("All channels")
                     }
                     .padding(.horizontal, 16)
                 }
@@ -180,7 +183,6 @@ struct SignInPrompt: View {
 
 struct YouView: View {
     @EnvironmentObject private var app: AppModel
-    @EnvironmentObject private var settings: AppSettings
     @State private var confirmSignOut = false
 
     var body: some View {
@@ -190,20 +192,41 @@ struct YouView: View {
                     HStack(spacing: 14) {
                         Avatar(url: app.account?.avatar, size: 60)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(app.account?.name ?? "Signed in").font(.title3.weight(.semibold))
-                            if let h = app.account?.handle { Text(h).foregroundStyle(.secondary) }
+                            Text(app.account?.name ?? "Signed In").font(.title3.weight(.semibold))
+                            if let h = app.account?.handle { Text(h).font(.subheadline).foregroundStyle(.secondary) }
                         }
                     }
                     .padding(.vertical, 6)
+                    .accessibilityElement(children: .combine)
                 } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Sign in to see your subscriptions, history, playlists and recommendations.")
-                            .foregroundStyle(.secondary)
-                        Button("Sign In with Google") { app.showSignIn = true }
-                            .buttonStyle(.glassProminent)
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 14) {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.system(.largeTitle))
+                                .foregroundStyle(.secondary)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Not Signed In").font(.headline)
+                                Text("Sign in to see your subscriptions, history, playlists and recommendations.")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Button { app.showSignIn = true } label: {
+                            Text("Sign In with Google").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.large)
                     }
                     .padding(.vertical, 6)
                 }
+            }
+
+            Section {
+                StatsCard()
+                    .listRowInsets(EdgeInsets())
+            } footer: {
+                Text("Counted on this device since you installed Unreel.")
             }
 
             if app.signedIn {
@@ -216,10 +239,8 @@ struct YouView: View {
                 }
             }
 
-            Section("This Device") {
-                LabeledContent("Ads blocked", value: settings.adsBlockedTotal.formatted())
-                LabeledContent("Sponsor segments skipped", value: settings.segmentsSkippedTotal.formatted())
-                LabeledContent("Time saved", value: Duration.seconds(settings.secondsSavedTotal).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .abbreviated)))
+            Section {
+                NavigationLink(value: Route.settings) { Label("Settings", systemImage: "gearshape") }
             }
 
             if app.signedIn {
@@ -229,6 +250,12 @@ struct YouView: View {
             }
         }
         .navigationTitle("You")
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                NavigationLink(value: Route.settings) { Image(systemName: "gearshape") }
+                    .accessibilityLabel("Settings")
+            }
+        }
         .confirmationDialog("Sign out of YouTube?", isPresented: $confirmSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { Task { await app.signOut() } }
         } message: {
@@ -358,9 +385,15 @@ struct SearchScreen: View {
             } else {
                 List {
                     if recent.isEmpty {
-                        ContentUnavailableView("Search YouTube", systemImage: "magnifyingglass",
-                                               description: Text("Find videos, channels and playlists."))
-                            .listRowBackground(Color.clear)
+                        ContentUnavailableView {
+                            Label("Search YouTube", systemImage: "magnifyingglass")
+                        } description: {
+                            Text("Find videos, channels and playlists, or paste a YouTube link to open it.")
+                        } actions: {
+                            pasteLinkButton
+                                .buttonBorderShape(.capsule)
+                        }
+                        .listRowBackground(Color.clear)
                     } else {
                         Section {
                             ForEach(recent, id: \.self) { term in
@@ -381,8 +414,21 @@ struct SearchScreen: View {
                             HStack {
                                 Text("Recent")
                                 Spacer()
-                                Button("Clear") { saveRecent([]) }.font(.footnote)
+                                Button("Clear") { withAnimation { saveRecent([]) } }
+                                    .font(.footnote.weight(.semibold))
+                                    .accessibilityLabel("Clear recent searches")
                             }
+                        }
+
+                        Section {
+                            pasteLinkButton
+                                .buttonBorderShape(.capsule)
+                                .frame(maxWidth: .infinity)
+                                .listRowBackground(Color.clear)
+                        } footer: {
+                            Text("Copy a YouTube link in another app, then paste it here to open it.")
+                                .frame(maxWidth: .infinity)
+                                .multilineTextAlignment(.center)
                         }
                     }
                 }
@@ -423,6 +469,14 @@ struct SearchScreen: View {
         saveRecent([q] + recent.filter { $0.caseInsensitiveCompare(q) != .orderedSame })
     }
 
+    /// The system paste button: reads the clipboard only when tapped, so no paste prompt appears.
+    private var pasteLinkButton: some View {
+        PasteButton(payloadType: String.self) { strings in
+            guard let text = strings.first else { return }
+            Task { @MainActor in app.openYouTubeLink(in: text) }
+        }
+    }
+
     private var filterChips: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
@@ -449,6 +503,7 @@ struct SearchScreen: View {
                         .font(.subheadline.weight(.semibold))
                     }
                     .buttonStyle(.plain)
+                    .accessibilityAddTraits(f == filter ? .isSelected : [])
                 }
             }
             .padding(.horizontal, 16)
